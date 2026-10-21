@@ -47,13 +47,13 @@ class IdentityAdminSuite(unittest.TestCase):
         cls._tokens = {}
 
     def token(self, username, password=None, totp_secret=None):
-        key = (username, bool(totp_secret))
-        if key in self._tokens:
-            return self._tokens[key]
+        # Sin cache entre pruebas: cada operacion de administracion se valida
+        # con un token recien emitido, para que un token caducado o consumido
+        # no se confunda con un rechazo de permisos.
         user = self.users.get(username)
-        if user is None:
+        if user is None and password is None:
             raise unittest.SkipTest(f"unknown identity {username}")
-        secret = totp_secret if totp_secret is not None else user.get("totp_secret")
+        secret = totp_secret if totp_secret is not None else (user or {}).get("totp_secret")
         flow = self.setup_realm.BrowserFlow(
             KC_URL,
             self.credentials["realm"],
@@ -79,7 +79,6 @@ class IdentityAdminSuite(unittest.TestCase):
                     self.credentials["clientId"],
                     self.credentials["redirectUri"],
                 )
-        self._tokens[key] = result["access_token"]
         return result["access_token"]
 
     def call(self, token, method, path, body=None):
@@ -160,7 +159,35 @@ class IdentityAdminSuite(unittest.TestCase):
         self.assertEqual(400, status, payload)
         self.assertEqual("IDENTITY_INVALID", payload.get("code"))
 
-    def test_07_admin_actions_are_audited(self):
+    def test_07_platform_role_cannot_be_granted_from_the_application(self):
+        """La interfaz no puede concederse a si misma el rol de plataforma."""
+        token = self.token("medico.test")
+        status, payload = self.call(
+            token, "POST", "/api/v1/admin/identities",
+            {"username": "escalada.test", "roles": ["sgsi-admin"]},
+        )
+        self.assertIn(status, (400, 403), payload)
+        self.assertEqual("IDENTITY_PROTECTED_ROLE", payload.get("code"))
+
+    def test_08_password_never_travels_to_the_browser(self):
+        """La credencial se entrega en un fichero 0600 del servidor."""
+        token = self.token("medico.test")
+        username = "fichero-%d.test" % int(time.time())
+        status, payload = self.call(
+            token, "POST", "/api/v1/admin/identities",
+            {"username": username, "roles": ["medico"], "require_mfa": True},
+        )
+        self.assertEqual(201, status, payload)
+        self.assertNotIn("temporary_password", payload)
+        self.assertNotIn("password", json.dumps(payload).lower())
+        credential_file = payload.get("credential_file")
+        self.assertTrue(credential_file)
+        path = Path(credential_file)
+        self.assertTrue(path.is_file(), credential_file)
+        self.assertEqual("600", oct(path.stat().st_mode)[-3:])
+        self.assertIn("password", path.read_text(encoding="utf-8"))
+
+    def test_09_admin_actions_are_audited(self):
         token = self.token("auditor.test")
         status, payload = self.call(token, "GET", "/api/v1/audit/events")
         self.assertEqual(200, status, payload)
