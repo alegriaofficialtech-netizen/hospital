@@ -82,12 +82,12 @@ describe('MockDataService', () => {
 
     const response = service.validateOrder({
       order_id: analyzed.order_id,
-      observations: 'Synthetic values reviewed.',
+      observations: 'Valores sintéticos revisados.',
     });
 
     expect(response.status).toBe('SUCCESS');
     expect(response.order.status).toBe('VALIDATED_AND_RELEASED');
-    expect(response.order.observations).toBe('Synthetic values reviewed.');
+    expect(response.order.observations).toBe('Valores sintéticos revisados.');
     expect(response.order.validated_by).toBe('demo.pathologist');
     expect(response.order.validated_at).toBeTruthy();
     expect(response.order.version).toBe(analyzed.version + 1);

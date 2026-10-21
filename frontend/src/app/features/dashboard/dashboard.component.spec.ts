@@ -50,7 +50,7 @@ describe('DashboardComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.componentInstance.canViewOrders()).toBe(false);
-    expect(fixture.nativeElement.textContent).toContain('Audit chain');
+    expect(fixture.nativeElement.textContent).toContain('Cadena de auditoría');
   });
 
   it('requests orders for a clinical role', () => {

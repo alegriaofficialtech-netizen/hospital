@@ -1,14 +1,14 @@
 <section class="page">
   <header class="page-header">
     <div>
-      <h1 class="page-title">Clinical dashboard</h1>
+      <h1 class="page-title">Panel clínico</h1>
       <p class="page-subtitle">
-        Synthetic operational view of orders, validation work and audit integrity.
+        Vista operativa sintética de órdenes, validación e integridad de la auditoría.
       </p>
     </div>
     <button mat-stroked-button type="button" (click)="refresh()" [disabled]="loading()">
       <mat-icon>refresh</mat-icon>
-      Refresh
+      Actualizar
     </button>
   </header>
 
@@ -16,7 +16,7 @@
     <mat-card class="error-card" role="alert">
       <mat-icon>error_outline</mat-icon>
       <div>
-        <strong>Unable to load the dashboard</strong>
+        <strong>No se pudo cargar el panel clínico</strong>
         <p>{{ message }}</p>
       </div>
     </mat-card>
@@ -25,35 +25,35 @@
   @if (loading()) {
     <div class="loading-row">
       <mat-spinner diameter="36" />
-      <span>Loading synthetic data…</span>
+      <span>Cargando datos sintéticos…</span>
     </div>
   }
 
   <div class="kpi-grid">
     <mat-card class="kpi-card">
       <mat-icon class="kpi-icon">science</mat-icon>
-      <span class="kpi-label">Total orders</span>
+      <span class="kpi-label">Órdenes totales</span>
       <strong class="kpi-value">{{ canViewOrders() ? metrics().totalOrders : '—' }}</strong>
       <span class="kpi-hint">
-        {{ canViewOrders() ? 'All statuses' : 'Clinical role required' }}
+        {{ canViewOrders() ? 'Todos los estados' : 'Se requiere rol clínico' }}
       </span>
     </mat-card>
 
     <mat-card class="kpi-card">
       <mat-icon class="kpi-icon warning">pending_actions</mat-icon>
-      <span class="kpi-label">Pending validation</span>
+      <span class="kpi-label">Pendientes de validación</span>
       <strong class="kpi-value">{{ canViewOrders() ? metrics().pendingValidation : '—' }}</strong>
       <span class="kpi-hint">
-        {{ canViewOrders() ? 'Analyzed orders' : 'Clinical role required' }}
+        {{ canViewOrders() ? 'Órdenes analizadas' : 'Se requiere rol clínico' }}
       </span>
     </mat-card>
 
     <mat-card class="kpi-card">
       <mat-icon class="kpi-icon success">task_alt</mat-icon>
-      <span class="kpi-label">Released</span>
+      <span class="kpi-label">Liberadas</span>
       <strong class="kpi-value">{{ canViewOrders() ? metrics().released : '—' }}</strong>
       <span class="kpi-hint">
-        {{ canViewOrders() ? 'Validated reports' : 'Clinical role required' }}
+        {{ canViewOrders() ? 'Informes validados' : 'Se requiere rol clínico' }}
       </span>
     </mat-card>
 
@@ -61,7 +61,7 @@
       <mat-icon class="kpi-icon" [class.success]="metrics().auditChainValid === true">
         {{ metrics().auditChainValid === false ? 'gpp_bad' : 'verified_user' }}
       </mat-icon>
-      <span class="kpi-label">Audit chain</span>
+      <span class="kpi-label">Cadena de auditoría</span>
       <strong
         class="kpi-value"
         [class.text-success]="metrics().auditChainValid === true"
@@ -71,9 +71,9 @@
       </strong>
       <span class="kpi-hint">
         @if (!isAuditor()) {
-          Auditor role required
+          Se requiere rol de auditor
         } @else {
-          {{ metrics().auditEvents }} events
+          {{ metrics().auditEvents }} eventos
         }
       </span>
     </mat-card>
@@ -82,42 +82,42 @@
   <mat-card class="table-card">
     <div class="card-heading">
       <div>
-        <h2>Recent orders</h2>
-        <p>Latest synthetic activity, newest first.</p>
+        <h2>Órdenes recientes</h2>
+        <p>Actividad sintética más reciente, de más nueva a más antigua.</p>
       </div>
     </div>
 
     @if (!canViewOrders()) {
       <p class="empty-state">
-        Order data is restricted to clinical roles. Use the Audit trail to inspect security events.
+        Los datos de órdenes se restringen a los roles clínicos. Use la Auditoría para revisar los eventos de seguridad.
       </p>
     } @else if (recentOrders().length) {
       <div class="table-wrap">
         <table mat-table [dataSource]="recentOrders()" class="app-table">
           <ng-container matColumnDef="order">
-            <th mat-header-cell *matHeaderCellDef>Order</th>
+            <th mat-header-cell *matHeaderCellDef>Orden</th>
             <td mat-cell *matCellDef="let order">{{ order.order_id }}</td>
           </ng-container>
 
           <ng-container matColumnDef="patient">
-            <th mat-header-cell *matHeaderCellDef>Patient</th>
+            <th mat-header-cell *matHeaderCellDef>Paciente</th>
             <td mat-cell *matCellDef="let order">{{ order.patient_dni }}</td>
           </ng-container>
 
           <ng-container matColumnDef="test">
-            <th mat-header-cell *matHeaderCellDef>Test</th>
+            <th mat-header-cell *matHeaderCellDef>Prueba</th>
             <td mat-cell *matCellDef="let order">{{ order.test_type }}</td>
           </ng-container>
 
           <ng-container matColumnDef="status">
-            <th mat-header-cell *matHeaderCellDef>Status</th>
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
             <td mat-cell *matCellDef="let order">
               <app-order-status-badge [status]="order.status" />
             </td>
           </ng-container>
 
           <ng-container matColumnDef="created">
-            <th mat-header-cell *matHeaderCellDef>Created</th>
+            <th mat-header-cell *matHeaderCellDef>Creada</th>
             <td mat-cell *matCellDef="let order">{{ order.created_at | date: 'short' }}</td>
           </ng-container>
 
@@ -126,7 +126,7 @@
         </table>
       </div>
     } @else {
-      <p class="empty-state">No synthetic orders are available.</p>
+      <p class="empty-state">No hay órdenes sintéticas disponibles.</p>
     }
   </mat-card>
 </section>

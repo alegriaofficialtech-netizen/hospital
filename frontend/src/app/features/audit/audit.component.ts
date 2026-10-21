@@ -112,6 +112,6 @@ export class AuditComponent {
       const body = error.error as { message?: string } | null;
       return body?.message ?? `Request failed with status ${error.status}.`;
     }
-    return 'The audit trail could not be loaded.';
+    return 'No se pudo cargar la auditoría.';
   }
 }

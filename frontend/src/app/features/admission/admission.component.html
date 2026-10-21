@@ -1,48 +1,48 @@
 <section class="page">
   <header class="page-header">
     <div>
-      <h1 class="page-title">Admission</h1>
-      <p class="page-subtitle">Register synthetic samples and review the full order list.</p>
+      <h1 class="page-title">Admisión</h1>
+      <p class="page-subtitle">Registre muestras sintéticas y revise la lista completa de órdenes.</p>
     </div>
     <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
       <mat-icon>refresh</mat-icon>
-      Refresh
+      Actualizar
     </button>
   </header>
 
   <mat-card class="form-card">
     <div class="card-heading">
       <div>
-        <h2>New order</h2>
-        <p>Only synthetic identifiers are accepted (for example DEMO-0007).</p>
+        <h2>Nueva orden</h2>
+        <p>Solo se aceptan identificadores sintéticos (por ejemplo DEMO-0007).</p>
       </div>
     </div>
 
     <form [formGroup]="form" (ngSubmit)="createOrder()" class="order-form">
       <mat-form-field appearance="outline">
-        <mat-label>Order ID</mat-label>
+        <mat-label>ID de orden</mat-label>
         <input matInput formControlName="order_id" placeholder="ORD-2026-0007" />
         <mat-icon matSuffix>tag</mat-icon>
         @if (form.controls.order_id.hasError('required')) {
-          <mat-error>Order ID is required.</mat-error>
+          <mat-error>El ID de orden es obligatorio.</mat-error>
         } @else if (form.controls.order_id.hasError('pattern')) {
-          <mat-error>Use the ORD-YYYY-#### format.</mat-error>
+          <mat-error>Use el formato ORD-YYYY-####.</mat-error>
         }
       </mat-form-field>
 
       <mat-form-field appearance="outline">
-        <mat-label>Patient DNI</mat-label>
+        <mat-label>DNI del paciente</mat-label>
         <input matInput formControlName="patient_dni" placeholder="DEMO-0007" />
         <mat-icon matSuffix>badge</mat-icon>
         @if (form.controls.patient_dni.hasError('required')) {
-          <mat-error>Patient DNI is required.</mat-error>
+          <mat-error>El DNI del paciente es obligatorio.</mat-error>
         } @else if (form.controls.patient_dni.hasError('pattern')) {
-          <mat-error>Use a synthetic DEMO-#### identifier.</mat-error>
+          <mat-error>Use un identificador sintético DEMO-####.</mat-error>
         }
       </mat-form-field>
 
       <mat-form-field appearance="outline">
-        <mat-label>Test type</mat-label>
+        <mat-label>Tipo de prueba</mat-label>
         <mat-select formControlName="test_type">
           @for (testType of testTypes; track testType) {
             <mat-option [value]="testType">{{ testType }}</mat-option>
@@ -58,7 +58,7 @@
         [disabled]="submitting()"
       >
         <mat-icon>{{ submitting() ? 'hourglass_top' : 'add' }}</mat-icon>
-        {{ submitting() ? 'Creating…' : 'Create order' }}
+        {{ submitting() ? 'Creando…' : 'Crear orden' }}
       </button>
     </form>
 
@@ -73,13 +73,13 @@
   <mat-card class="table-card">
     <div class="card-heading table-heading">
       <div>
-        <h2>Orders</h2>
-        <p>{{ filteredOrders().length }} of {{ orders().length }} synthetic orders.</p>
+        <h2>Órdenes</h2>
+        <p>{{ filteredOrders().length }} de {{ orders().length }} órdenes sintéticas.</p>
       </div>
       <mat-form-field appearance="outline" class="filter-field">
-        <mat-label>Status</mat-label>
+        <mat-label>Estado</mat-label>
         <mat-select [value]="statusFilter()" (selectionChange)="setStatusFilter($event.value)">
-          <mat-option value="ALL">All statuses</mat-option>
+          <mat-option value="ALL">Todos los estados</mat-option>
           @for (status of statuses; track status) {
             <mat-option [value]="status">{{ statusLabels[status] }}</mat-option>
           }
@@ -90,7 +90,7 @@
     @if (loading()) {
       <div class="loading-row">
         <mat-spinner diameter="32" />
-        <span>Loading orders…</span>
+        <span>Cargando órdenes…</span>
       </div>
     }
 
@@ -105,34 +105,34 @@
       <div class="table-wrap">
         <table mat-table [dataSource]="filteredOrders()" class="app-table">
           <ng-container matColumnDef="order">
-            <th mat-header-cell *matHeaderCellDef>Order</th>
+            <th mat-header-cell *matHeaderCellDef>Orden</th>
             <td mat-cell *matCellDef="let order">{{ order.order_id }}</td>
           </ng-container>
 
           <ng-container matColumnDef="patient">
-            <th mat-header-cell *matHeaderCellDef>Patient</th>
+            <th mat-header-cell *matHeaderCellDef>Paciente</th>
             <td mat-cell *matCellDef="let order">{{ order.patient_dni }}</td>
           </ng-container>
 
           <ng-container matColumnDef="test">
-            <th mat-header-cell *matHeaderCellDef>Test</th>
+            <th mat-header-cell *matHeaderCellDef>Prueba</th>
             <td mat-cell *matCellDef="let order">{{ order.test_type }}</td>
           </ng-container>
 
           <ng-container matColumnDef="status">
-            <th mat-header-cell *matHeaderCellDef>Status</th>
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
             <td mat-cell *matCellDef="let order">
               <app-order-status-badge [status]="order.status" />
             </td>
           </ng-container>
 
           <ng-container matColumnDef="created">
-            <th mat-header-cell *matHeaderCellDef>Created</th>
+            <th mat-header-cell *matHeaderCellDef>Creada</th>
             <td mat-cell *matCellDef="let order">{{ order.created_at | date: 'short' }}</td>
           </ng-container>
 
           <ng-container matColumnDef="version">
-            <th mat-header-cell *matHeaderCellDef>Version</th>
+            <th mat-header-cell *matHeaderCellDef>Versión</th>
             <td mat-cell *matCellDef="let order">v{{ order.version }}</td>
           </ng-container>
 
@@ -141,7 +141,7 @@
         </table>
       </div>
     } @else if (!loading()) {
-      <p class="empty-state">No orders match the selected status.</p>
+      <p class="empty-state">Ninguna orden coincide con el estado seleccionado.</p>
     }
   </mat-card>
 </section>

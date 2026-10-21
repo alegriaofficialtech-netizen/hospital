@@ -30,22 +30,22 @@
 
     <div class="sidenav-footer">
       <span class="role-label">{{ roleLabel() }}</span>
-      <span class="mode-label">{{ demoAuth() ? 'Synthetic demo data' : 'Local real Keycloak' }}</span>
+      <span class="mode-label">{{ demoAuth() ? 'Datos sintéticos de demostración' : 'Keycloak real local' }}</span>
     </div>
   </mat-sidenav>
 
   <mat-sidenav-content class="app-content">
     <mat-toolbar class="app-toolbar">
-      <button mat-icon-button type="button" aria-label="Toggle navigation" (click)="sidenav.toggle()">
+      <button mat-icon-button type="button" aria-label="Alternar navegación" (click)="sidenav.toggle()">
         <mat-icon>menu</mat-icon>
       </button>
       <span class="app-title">SGSI-ZTA Hospital Lab</span>
       <span class="toolbar-spacer"></span>
-      <mat-chip-set class="user-chip" aria-label="Signed in user">
+      <mat-chip-set class="user-chip" aria-label="Usuario con sesión iniciada">
         <mat-chip highlighted>{{ initials() }}</mat-chip>
       </mat-chip-set>
       <span class="username">{{ user()?.displayName }}</span>
-      <button mat-icon-button type="button" aria-label="Sign out" (click)="logout()">
+      <button mat-icon-button type="button" aria-label="Cerrar sesión" (click)="logout()">
         <mat-icon>logout</mat-icon>
       </button>
     </mat-toolbar>

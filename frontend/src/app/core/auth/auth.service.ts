@@ -107,7 +107,9 @@ export class AuthService {
 
   loginDemo(role: UserRole, username: string): void {
     if (!environment.useMockAuth) {
-      throw new Error('Demo authentication is disabled while Keycloak mode is active.');
+      throw new Error(
+        'La autenticación demo está desactivada mientras el modo Keycloak está activo.',
+      );
     }
     const cleanUsername = username.trim() || this.defaultUsername(role);
     const session: SessionUser = {
@@ -199,7 +201,7 @@ export class AuthService {
       // The failure used to be swallowed, so the login button stayed disabled
       // with no visible reason. The reason is now part of the state.
       const reason = error instanceof Error ? error.message : String(error);
-      console.warn('Keycloak initialization failed.', error);
+      console.warn('Falló la inicialización de Keycloak.', error);
       this.keycloakInitError.set(
         `No se pudo inicializar el cliente OIDC contra ${environment.keycloak.url}: ${reason}`,
       );

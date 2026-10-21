@@ -1,21 +1,21 @@
 <section class="page">
   <header class="page-header">
     <div>
-      <h1 class="page-title">Medical validation</h1>
+      <h1 class="page-title">Validación médica</h1>
       <p class="page-subtitle">
-        Review analyzed orders and release reports with
-        {{ demoAuth() ? 'a simulated MFA step' : 'Keycloak TOTP MFA' }}.
+        Revise las órdenes analizadas y libere los informes con
+        {{ demoAuth() ? 'un paso MFA simulado' : 'MFA TOTP de Keycloak' }}.
       </p>
     </div>
     <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
       <mat-icon>refresh</mat-icon>
-      Refresh
+      Actualizar
     </button>
   </header>
 
   <div class="synthetic-banner">
     <mat-icon>science</mat-icon>
-    <span>Synthetic clinical data only. No real patient information is stored or displayed.</span>
+    <span>Solo datos clínicos sintéticos. No se almacena ni se muestra información real de pacientes.</span>
   </div>
 
   @if (error(); as message) {
@@ -28,7 +28,7 @@
   @if (loading()) {
     <div class="loading-row">
       <mat-spinner diameter="32" />
-      <span>Loading analyzed orders…</span>
+      <span>Cargando órdenes analizadas…</span>
     </div>
   }
 
@@ -36,8 +36,8 @@
     <mat-card class="list-card">
       <div class="card-heading">
         <div>
-          <h2>Analyzed orders</h2>
-          <p>{{ orders().length }} pending report(s).</p>
+          <h2>Órdenes analizadas</h2>
+          <p>{{ orders().length }} informe(s) pendiente(s).</p>
         </div>
       </div>
 
@@ -56,7 +56,7 @@
           }
         </mat-action-list>
       } @else if (!loading()) {
-        <p class="empty-state">No analyzed orders are waiting for validation.</p>
+        <p class="empty-state">No hay órdenes analizadas pendientes de validación.</p>
       }
     </mat-card>
 
@@ -72,20 +72,20 @@
 
         <dl class="order-meta">
           <div>
-            <dt>Created by</dt>
+            <dt>Creada por</dt>
             <dd>{{ order.created_by }}</dd>
           </div>
           <div>
-            <dt>Created at</dt>
+            <dt>Creada el</dt>
             <dd>{{ order.created_at | date: 'medium' }}</dd>
           </div>
           <div>
-            <dt>Version</dt>
+            <dt>Versión</dt>
             <dd>v{{ order.version }}</dd>
           </div>
         </dl>
 
-        <h3>Measurements</h3>
+        <h3>Mediciones</h3>
         @if (measurements().length) {
           <div class="measurement-grid">
             @for (measurement of measurements(); track measurement.key) {
@@ -96,17 +96,17 @@
             }
           </div>
         } @else {
-          <p class="empty-state">This order has no measurements.</p>
+          <p class="empty-state">Esta orden no tiene mediciones.</p>
         }
 
         <mat-form-field appearance="outline" class="full-width observations-field">
-          <mat-label>Observations</mat-label>
+          <mat-label>Observaciones</mat-label>
           <textarea
             matInput
             rows="4"
             [value]="observations()"
             (input)="onObservationsInput($event)"
-            placeholder="Synthetic analytical observations"
+            placeholder="Observaciones analíticas sintéticas"
           ></textarea>
         </mat-form-field>
 
@@ -114,29 +114,29 @@
           <div class="mfa-copy">
             <mat-icon>{{ mfaVerified() ? 'verified' : 'security' }}</mat-icon>
             <div>
-              <strong>Multi-factor authentication</strong>
+              <strong>Autenticación multifactor</strong>
               <p>
                 @if (mfaVerified()) {
-                  {{ demoAuth() ? 'Synthetic MFA verified for this session.' : 'Keycloak TOTP verified for this session.' }}
+                  {{ demoAuth() ? 'MFA sintética verificada en esta sesión.' : 'TOTP de Keycloak verificado en esta sesión.' }}
                 } @else if (demoAuth()) {
-                  Validation is blocked until MFA is simulated.
+                  La validación queda bloqueada hasta simular el MFA.
                 } @else {
-                  The Keycloak token has no OTP evidence. The backend will deny validation.
+                  El token de Keycloak no aporta evidencia OTP. El backend denegará la validación.
                 }
               </p>
             </div>
           </div>
           @if (mfaVerified()) {
             <mat-chip-set>
-              <mat-chip highlighted>{{ demoAuth() ? 'MFA verified' : 'TOTP verified' }}</mat-chip>
+              <mat-chip highlighted>{{ demoAuth() ? 'MFA verificado' : 'TOTP verificado' }}</mat-chip>
             </mat-chip-set>
           } @else if (demoAuth()) {
             <button mat-stroked-button type="button" (click)="simulateMfa()">
-              Simulate MFA verification
+              Simular verificación MFA
             </button>
           } @else {
             <mat-chip-set>
-              <mat-chip highlighted>TOTP required</mat-chip>
+              <mat-chip highlighted>TOTP obligatorio</mat-chip>
             </mat-chip-set>
           }
         </div>
@@ -157,13 +157,13 @@
             (click)="validate()"
           >
             <mat-icon>{{ validating() ? 'hourglass_top' : 'task_alt' }}</mat-icon>
-            {{ validating() ? 'Validating…' : 'Validate and release' }}
+            {{ validating() ? 'Validando…' : 'Validar y liberar' }}
           </button>
         </div>
       } @else {
         <div class="empty-detail">
           <mat-icon>biotech</mat-icon>
-          <p>Select an analyzed order to review its measurements.</p>
+          <p>Seleccione una orden analizada para revisar sus mediciones.</p>
         </div>
       }
     </mat-card>

@@ -141,6 +141,6 @@ export class IndicatorsComponent {
       const body = error.error as { message?: string } | null;
       return body?.message ?? `Request failed with status ${error.status}.`;
     }
-    return 'Indicators could not be calculated.';
+    return 'No se pudieron calcular los indicadores.';
   }
 }

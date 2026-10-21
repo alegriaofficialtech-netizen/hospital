@@ -22,9 +22,9 @@ describe('ShellComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
 
     expect(text).toContain('SGSI-ZTA Hospital Lab');
-    expect(text).toContain('Admission');
-    expect(text).toContain('Indicators');
-    expect(text).not.toContain('Medical validation');
-    expect(text).not.toContain('Audit trail');
+    expect(text).toContain('Admisión');
+    expect(text).toContain('Indicadores');
+    expect(text).not.toContain('Validación médica');
+    expect(text).not.toContain('Auditoría');
   });
 });

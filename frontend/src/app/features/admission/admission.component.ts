@@ -125,7 +125,7 @@ export class AdmissionComponent {
       )
       .subscribe({
         next: (response) => {
-          this.snackBar.open(`Order ${response.order.order_id} created.`, 'Dismiss', {
+          this.snackBar.open(`Orden ${response.order.order_id} creada.`, 'Cerrar', {
             duration: 4000,
           });
           this.resetForm();
@@ -135,7 +135,7 @@ export class AdmissionComponent {
           const message = this.describeError(error);
           this.createError.set(message);
           if (error instanceof HttpErrorResponse && error.status === 409) {
-            this.snackBar.open('Duplicate order ID rejected.', 'Dismiss', { duration: 4000 });
+            this.snackBar.open('ID de orden duplicado: rechazado.', 'Cerrar', { duration: 4000 });
           }
         },
       });
@@ -162,10 +162,10 @@ export class AdmissionComponent {
     if (error instanceof HttpErrorResponse) {
       const body = error.error as { message?: string; code?: string } | null;
       if (error.status === 409) {
-        return body?.message ?? 'That order ID already exists.';
+        return body?.message ?? 'Ese ID de orden ya existe.';
       }
       return body?.message ?? `Request failed with status ${error.status}.`;
     }
-    return 'The request could not be completed.';
+    return 'No se pudo completar la solicitud.';
   }
 }

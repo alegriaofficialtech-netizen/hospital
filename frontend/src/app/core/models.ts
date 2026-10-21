@@ -12,10 +12,10 @@ export const USER_ROLES: readonly UserRole[] = [
 ];
 
 export const ROLE_LABELS: Record<UserRole, string> = {
-  ROLE_RECEPTION: 'Reception',
-  ROLE_LAB_TECH: 'Laboratory Technician',
-  ROLE_PATHOLOGIST: 'Pathologist',
-  ROLE_SECURITY_AUDITOR: 'Security Auditor',
+  ROLE_RECEPTION: 'Recepción',
+  ROLE_LAB_TECH: 'Técnico de laboratorio',
+  ROLE_PATHOLOGIST: 'Patólogo',
+  ROLE_SECURITY_AUDITOR: 'Auditor de seguridad',
 };
 
 export type OrderStatus =
@@ -32,10 +32,10 @@ export const ORDER_STATUSES: readonly OrderStatus[] = [
 ];
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
-  CREATED: 'Created',
-  SAMPLE_COLLECTED: 'Sample collected',
-  ANALYZED: 'Analyzed',
-  VALIDATED_AND_RELEASED: 'Validated and released',
+  CREATED: 'Creada',
+  SAMPLE_COLLECTED: 'Muestra recogida',
+  ANALYZED: 'Analizada',
+  VALIDATED_AND_RELEASED: 'Validada y liberada',
 };
 
 export const TEST_TYPES = [

@@ -72,13 +72,13 @@ export class DashboardComponent {
 
   auditChainLabel(): string {
     if (!this.isAuditor()) {
-      return 'Restricted';
+      return 'Restringido';
     }
     const audit = this.audit();
     if (!audit) {
-      return 'Pending';
+      return 'Pendiente';
     }
-    return audit.audit_chain_valid ? 'Valid' : 'Invalid';
+    return audit.audit_chain_valid ? 'Válida' : 'Inválida';
   }
 
   private load(): void {
@@ -106,8 +106,8 @@ export class DashboardComponent {
   private describeError(error: unknown): string {
     if (error instanceof HttpErrorResponse) {
       const body = error.error as { message?: string } | null;
-      return body?.message ?? `Request failed with status ${error.status}.`;
+      return body?.message ?? `La solicitud falló con el estado ${error.status}.`;
     }
-    return 'The dashboard could not be loaded.';
+    return 'No se pudo cargar el panel clínico.';
   }
 }

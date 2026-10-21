@@ -98,7 +98,7 @@ export class MockDataService {
       throw new MockApiError(
         403,
         'MFA_AUTHENTICATION_REQUIRED',
-        'Clinical validation requires a verified MFA factor.',
+        'La validación clínica exige un factor MFA verificado.',
       );
     }
 
@@ -115,7 +115,7 @@ export class MockDataService {
     }
 
     order.status = 'VALIDATED_AND_RELEASED';
-    order.observations = body.observations?.trim() || 'Analytical values within reference range.';
+    order.observations = body.observations?.trim() || 'Valores analíticos dentro del rango de referencia.';
     order.validated_by = session.username;
     order.validated_at = isoNow();
     order.version += 1;
@@ -238,7 +238,7 @@ export class MockDataService {
         actor: 'demo.lab.tech',
         role: 'ROLE_LAB_TECH',
         status: 'ALLOWED',
-        details: 'Synthetic order list consulted.',
+        details: 'Lista de órdenes sintéticas consultada.',
         mfa: false,
         timestamp: '2026-10-15T09:20:00Z',
       },
@@ -247,7 +247,7 @@ export class MockDataService {
         actor: 'demo.security.auditor',
         role: 'ROLE_SECURITY_AUDITOR',
         status: 'ALLOWED',
-        details: 'Synthetic audit chain reviewed.',
+        details: 'Cadena de auditoría sintética revisada.',
         mfa: true,
         timestamp: '2026-10-15T10:05:00Z',
       },
@@ -277,7 +277,7 @@ export class MockDataService {
       {
         order_id: 'ORD-2026-0001',
         patient_dni: 'DEMO-0001',
-        test_type: 'HEMOGLOBIN COMPLETE',
+        test_type: 'HEMOGRAMA COMPLETO',
         status: 'ANALYZED',
         created_by: 'demo.reception',
         measurements: {
@@ -320,7 +320,7 @@ export class MockDataService {
       {
         order_id: 'ORD-2026-0004',
         patient_dni: 'DEMO-0004',
-        test_type: 'LIPID PROFILE',
+        test_type: 'PERFIL LIPÍDICO',
         status: 'CREATED',
         created_by: 'demo.reception',
         measurements: {},
@@ -331,7 +331,7 @@ export class MockDataService {
       {
         order_id: 'ORD-2026-0005',
         patient_dni: 'DEMO-0005',
-        test_type: 'RENAL FUNCTION',
+        test_type: 'FUNCIÓN RENAL',
         status: 'VALIDATED_AND_RELEASED',
         created_by: 'demo.reception',
         measurements: {
@@ -340,7 +340,7 @@ export class MockDataService {
           potasio_mmol_l: 4.2,
         },
         validated_by: 'demo.pathologist',
-        observations: 'Synthetic renal panel within reference range.',
+        observations: 'Panel renal sintético dentro del rango de referencia.',
         created_at: '2026-10-16T12:00:00Z',
         validated_at: '2026-10-16T16:25:00Z',
         version: 3,
@@ -355,7 +355,7 @@ export class MockDataService {
         created_by: 'demo.reception',
         measurements: { glucosa_mg_dl: 94 },
         validated_by: 'demo.pathologist',
-        observations: 'Synthetic glucose result released.',
+        observations: 'Resultado de glucosa sintético liberado.',
         created_at: '2026-10-17T14:40:00Z',
         validated_at: '2026-10-17T18:10:00Z',
         version: 3,

@@ -21,7 +21,7 @@ interface NavItem {
 
 const NAV_ITEMS: readonly NavItem[] = [
   {
-    label: 'Dashboard',
+    label: 'Panel',
     icon: 'dashboard',
     route: '/dashboard',
     roles: [
@@ -31,21 +31,21 @@ const NAV_ITEMS: readonly NavItem[] = [
       'ROLE_SECURITY_AUDITOR',
     ],
   },
-  { label: 'Admission', icon: 'assignment_ind', route: '/admision', roles: ['ROLE_RECEPTION'] },
+  { label: 'Admisión', icon: 'assignment_ind', route: '/admision', roles: ['ROLE_RECEPTION'] },
   {
-    label: 'Medical validation',
+    label: 'Validación médica',
     icon: 'biotech',
     route: '/medico',
     roles: ['ROLE_PATHOLOGIST'],
   },
   {
-    label: 'Audit trail',
+    label: 'Auditoría',
     icon: 'verified_user',
     route: '/auditoria',
     roles: ['ROLE_SECURITY_AUDITOR'],
   },
   {
-    label: 'Indicators',
+    label: 'Indicadores',
     icon: 'monitoring',
     route: '/indicadores',
     roles: [

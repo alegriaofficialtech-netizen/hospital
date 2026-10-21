@@ -32,7 +32,7 @@ function toHttpError(error: unknown, url: string): HttpErrorResponse {
   return new HttpErrorResponse({
     status: 500,
     error: {
-      message: 'Unexpected error in the mock API.',
+      message: 'Error inesperado en la API simulada.',
       code: 'MOCK_INTERNAL_ERROR',
     },
     url,
@@ -45,10 +45,10 @@ function requireRoles(
   code: string,
 ): void {
   if (!auth.isAuthenticated()) {
-    throw new MockApiError(401, 'UNAUTHENTICATED', 'Authentication is required.');
+    throw new MockApiError(401, 'UNAUTHENTICATED', 'Se requiere autenticación.');
   }
   if (!auth.hasAnyRole(roles)) {
-    throw new MockApiError(403, code, 'The current role cannot perform this operation.');
+    throw new MockApiError(403, code, 'El rol actual no puede realizar esta operación.');
   }
 }
 
@@ -117,7 +117,7 @@ function handleRequest(
       throw new MockApiError(
         403,
         'MFA_AUTHENTICATION_REQUIRED',
-        'Clinical validation requires a verified MFA factor.',
+        'La validación clínica exige un factor MFA verificado.',
       );
     }
     return {
@@ -131,5 +131,5 @@ function handleRequest(
     return { status: 200, body: mock.getAuditEvents() };
   }
 
-  throw new MockApiError(404, 'NOT_FOUND', `No mock handler for ${method} ${path}.`);
+  throw new MockApiError(404, 'NOT_FOUND', `No hay un manejador simulado para ${method} ${path}.`);
 }

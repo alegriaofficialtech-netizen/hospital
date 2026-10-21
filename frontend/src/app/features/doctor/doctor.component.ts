@@ -25,16 +25,16 @@ import { ClinicalOrder } from '../../core/models';
 import { OrderStatusBadgeComponent } from '../../shared/order-status-badge.component';
 
 const MEASUREMENT_LABELS: Record<string, string> = {
-  hemoglobina_g_dl: 'Hemoglobin (g/dL)',
-  hematocrito_pct: 'Hematocrit (%)',
-  leucocitos_mm3: 'Leukocytes (/mm³)',
-  leucocitos_mil_ul: 'Leukocytes (10³/µL)',
-  plaquetas_k_ul: 'Platelets (10³/µL)',
-  plaquetas_mil_ul: 'Platelets (10³/µL)',
-  glucosa_mg_dl: 'Glucose (mg/dL)',
-  creatinina_mg_dl: 'Creatinine (mg/dL)',
-  sodio_mmol_l: 'Sodium (mmol/L)',
-  potasio_mmol_l: 'Potassium (mmol/L)',
+  hemoglobina_g_dl: 'Hemoglobina (g/dL)',
+  hematocrito_pct: 'Hematocrito (%)',
+  leucocitos_mm3: 'Leucocitos (/mm³)',
+  leucocitos_mil_ul: 'Leucocitos (10³/µL)',
+  plaquetas_k_ul: 'Plaquetas (10³/µL)',
+  plaquetas_mil_ul: 'Plaquetas (10³/µL)',
+  glucosa_mg_dl: 'Glucosa (mg/dL)',
+  creatinina_mg_dl: 'Creatinina (mg/dL)',
+  sodio_mmol_l: 'Sodio (mmol/L)',
+  potasio_mmol_l: 'Potasio (mmol/L)',
 };
 
 interface MeasurementRow {
@@ -130,7 +130,7 @@ export class DoctorComponent {
       return;
     }
     this.auth.markMfaVerified();
-    this.snackBar.open('Synthetic MFA verification recorded for this session.', 'Dismiss', {
+    this.snackBar.open('Verificación MFA sintética registrada en esta sesión.', 'Cerrar', {
       duration: 3500,
     });
   }
@@ -155,7 +155,7 @@ export class DoctorComponent {
       )
       .subscribe({
         next: (response) => {
-          this.snackBar.open(response.message, 'Dismiss', { duration: 4500 });
+          this.snackBar.open(response.message, 'Cerrar', { duration: 4500 });
           this.selectedId.set(null);
           this.observations.set('');
           this.load();
@@ -169,6 +169,6 @@ export class DoctorComponent {
       const body = error.error as { message?: string } | null;
       return body?.message ?? `Request failed with status ${error.status}.`;
     }
-    return 'The request could not be completed.';
+    return 'No se pudo completar la solicitud.';
   }
 }
