@@ -27,6 +27,13 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
+from identity_admin import (
+    IdentityAdminClient,
+    IdentityAdminError,
+    generate_password,
+    summarise_users,
+    validate_username,
+)
 from database import (
     ClinicalDatabaseManager,
     DatabaseBackedAuditLogs,
@@ -119,6 +126,29 @@ DEFAULT_DISCOVERY_URL = os.environ.get(
 )
 DEFAULT_AUDIENCE = os.environ.get("KEYCLOAK_AUDIENCE", "clinical-poc-api")
 DEFAULT_AZP = os.environ.get("KEYCLOAK_EXPECTED_AZP", None)
+
+# Administracion de identidades: el backend es el proxy de confianza hacia la
+# API de administracion de Keycloak. La credencial vive en el entorno del
+# servidor y nunca se devuelve al navegador.
+KEYCLOAK_ADMIN_URL = os.environ.get("KEYCLOAK_ADMIN_URL", "http://127.0.0.1:8085")
+KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
+KEYCLOAK_ADMIN_USERNAME = os.environ.get("KEYCLOAK_ADMIN_USERNAME", "")
+KEYCLOAK_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "")
+
+
+def get_identity_admin() -> IdentityAdminClient:
+    if not KEYCLOAK_ADMIN_USERNAME or not KEYCLOAK_ADMIN_PASSWORD:
+        raise IdentityAdminError(
+            "la administracion de identidades no esta configurada en el servidor",
+            status=503,
+            code="IDENTITY_ADMIN_NOT_CONFIGURED",
+        )
+    return IdentityAdminClient(
+        KEYCLOAK_ADMIN_URL,
+        KEYCLOAK_REALM,
+        KEYCLOAK_ADMIN_USERNAME,
+        KEYCLOAK_ADMIN_PASSWORD,
+    )
 
 # Inicializacion del Gestor de Persistencia Duradera ACID (SQLite WAL)
 DB_PATH = os.environ.get("LIS_DB_PATH", os.path.join(CURRENT_DIR, "data", "lis.db"))
@@ -431,6 +461,14 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             return
 
         # 3. Consulta de Registros de Auditoria (Oficial de Seguridad / Auditor CISO)
+        if parsed.path == "/api/v1/admin/identities":
+            self._handle_admin_identities_get(client_ip)
+            return
+
+        if parsed.path == "/api/v1/admin/roles":
+            self._handle_admin_roles_get(client_ip)
+            return
+
         if parsed.path == "/api/v1/audit/events":
             context, err = self.extract_and_validate_auth()
             is_legacy_audit = False
@@ -474,6 +512,215 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
 
         self.send_json(404, {"error": "NotFound", "message": "Ruta no encontrada"})
 
+    # ------------------------------------------------- administracion de identidades
+
+    def _require_identity_admin(self, action: str, client_ip: str):
+        """Autentica y autoriza la administracion de identidades.
+
+        Devuelve (contexto, None) cuando la operacion esta permitida y
+        (None, (codigo, cuerpo)) cuando debe rechazarse.
+        """
+        context, err = self.extract_and_validate_auth()
+        if err:
+            status_code, err_body = err
+            record_audit_event(
+                action, "ANONYMOUS", "NONE", f"DENIED_{status_code}",
+                err_body["message"], client_ip,
+            )
+            return None, (status_code, err_body)
+        try:
+            enforce_clinical_action(context, "MANAGE_IDENTITIES")
+        except InsufficientPermissionsError:
+            record_audit_event(
+                action, context.username, str(list(context.roles)), "DENIED_FORBIDDEN",
+                "Intento de administracion de identidades sin rol de administrador de plataforma",
+                client_ip, context.mfa_verified,
+            )
+            return None, (403, {
+                "error": "Forbidden",
+                "message": "Acceso restringido al administrador de plataforma",
+                "code": "PLATFORM_ADMIN_ROLE_REQUIRED",
+            })
+        except MFARequiredError:
+            record_audit_event(
+                action, context.username, str(list(context.roles)), "DENIED_MFA_REQUIRED",
+                "Intento de administracion de identidades sin MFA acreditada",
+                client_ip, context.mfa_verified,
+            )
+            return None, (403, {
+                "error": "Forbidden",
+                "message": "La administracion de identidades exige MFA acreditada",
+                "code": "MFA_AUTHENTICATION_REQUIRED",
+            })
+        return context, None
+
+    def _handle_admin_identities_get(self, client_ip: str) -> None:
+        context, failure = self._require_identity_admin("LIST_IDENTITIES", client_ip)
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        try:
+            identities = get_identity_admin().list_users()
+        except IdentityAdminError as exc:
+            record_audit_event(
+                "LIST_IDENTITIES", context.username, str(list(context.roles)),
+                "DENIED_ERROR", str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(exc.status, {
+                "error": "IdentityAdminError", "message": str(exc), "code": exc.code,
+            })
+            return
+        record_audit_event(
+            "LIST_IDENTITIES", context.username, str(list(context.roles)), "ALLOWED",
+            "Listado de %d identidades" % len(identities), client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "identities": identities,
+            "summary": summarise_users(identities),
+        })
+
+    def _handle_admin_roles_get(self, client_ip: str) -> None:
+        context, failure = self._require_identity_admin("LIST_ROLES", client_ip)
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        try:
+            roles = get_identity_admin().list_roles()
+        except IdentityAdminError as exc:
+            record_audit_event(
+                "LIST_ROLES", context.username, str(list(context.roles)), "DENIED_ERROR",
+                str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(exc.status, {
+                "error": "IdentityAdminError", "message": str(exc), "code": exc.code,
+            })
+            return
+        record_audit_event(
+            "LIST_ROLES", context.username, str(list(context.roles)), "ALLOWED",
+            "Listado de %d roles" % len(roles), client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"roles": roles})
+
+    def _handle_admin_identity_create(self, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._require_identity_admin("CREATE_IDENTITY", client_ip)
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        username = str(payload.get("username") or "").strip()
+        reason = validate_username(username)
+        if reason:
+            record_audit_event(
+                "CREATE_IDENTITY", context.username, str(list(context.roles)),
+                "DENIED_INVALID", reason, client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest", "message": reason, "code": "IDENTITY_INVALID",
+            })
+            return
+        roles = [str(role) for role in (payload.get("roles") or [])]
+        require_mfa = bool(payload.get("require_mfa", False))
+        temporary_password = generate_password()
+        try:
+            identity = get_identity_admin().create_user(
+                username, temporary_password, roles, require_mfa,
+            )
+        except IdentityAdminError as exc:
+            record_audit_event(
+                "CREATE_IDENTITY", context.username, str(list(context.roles)),
+                "DENIED_ERROR", str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(exc.status, {
+                "error": "IdentityAdminError", "message": str(exc), "code": exc.code,
+            })
+            return
+        record_audit_event(
+            "CREATE_IDENTITY", context.username, str(list(context.roles)), "ALLOWED",
+            "Identidad sintetica creada con roles %s" % ",".join(sorted(roles)),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(201, {
+            "identity": identity,
+            "temporary_password": temporary_password,
+            "note": (
+                "La contrasena se muestra una sola vez y no se registra en la "
+                "cadena de auditoria."
+            ),
+        })
+
+    def _handle_admin_identity_state(
+        self, user_id: str, payload: Dict[str, Any], client_ip: str,
+    ) -> None:
+        context, failure = self._require_identity_admin("UPDATE_IDENTITY", client_ip)
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        enabled = payload.get("enabled")
+        roles = payload.get("roles")
+        if enabled is None and roles is None:
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Indica enabled o roles",
+                "code": "IDENTITY_NO_CHANGE",
+            })
+            return
+        try:
+            admin = get_identity_admin()
+            applied_roles = None
+            if roles is not None:
+                applied_roles = admin.set_user_roles(
+                    user_id, [str(role) for role in roles],
+                )
+            if enabled is not None:
+                admin.set_user_enabled(user_id, bool(enabled))
+        except IdentityAdminError as exc:
+            record_audit_event(
+                "UPDATE_IDENTITY", context.username, str(list(context.roles)),
+                "DENIED_ERROR", str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(exc.status, {
+                "error": "IdentityAdminError", "message": str(exc), "code": exc.code,
+            })
+            return
+        record_audit_event(
+            "UPDATE_IDENTITY", context.username, str(list(context.roles)), "ALLOWED",
+            "Identidad %s actualizada (enabled=%s, roles=%s)" % (
+                user_id, enabled, ",".join(applied_roles or []),
+            ),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"id": user_id, "enabled": enabled, "roles": applied_roles})
+
+    def _handle_admin_identity_password(self, user_id: str, client_ip: str) -> None:
+        context, failure = self._require_identity_admin("RESET_IDENTITY_PASSWORD", client_ip)
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        temporary_password = generate_password()
+        try:
+            get_identity_admin().reset_password(user_id, temporary_password)
+        except IdentityAdminError as exc:
+            record_audit_event(
+                "RESET_IDENTITY_PASSWORD", context.username, str(list(context.roles)),
+                "DENIED_ERROR", str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(exc.status, {
+                "error": "IdentityAdminError", "message": str(exc), "code": exc.code,
+            })
+            return
+        record_audit_event(
+            "RESET_IDENTITY_PASSWORD", context.username, str(list(context.roles)),
+            "ALLOWED", "Contrasena rotada de la identidad %s" % user_id,
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "id": user_id,
+            "temporary_password": temporary_password,
+            "note": (
+                "La contrasena se muestra una sola vez y no se registra en la "
+                "cadena de auditoria."
+            ),
+        })
+
     def do_POST(self) -> None:
         try:
             self._do_POST_internal()
@@ -502,6 +749,20 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             payload = {}
 
         # 1. Control de Autenticacion Local / Deprecacion con Fallback Restringido
+        if parsed.path == "/api/v1/admin/identities":
+            self._handle_admin_identity_create(payload, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/admin/identities/"):
+            remainder = parsed.path[len("/api/v1/admin/identities/"):]
+            parts = [segment for segment in remainder.split("/") if segment]
+            if len(parts) == 2 and parts[1] == "state":
+                self._handle_admin_identity_state(parts[0], payload, client_ip)
+                return
+            if len(parts) == 2 and parts[1] == "password":
+                self._handle_admin_identity_password(parts[0], client_ip)
+                return
+
         if parsed.path == "/api/v1/auth/login":
             if not ENABLE_LEGACY_AUTH:
                 record_audit_event("AUTH_LOGIN", "ANONYMOUS", "NONE", "DENIED", "Intento de login local deprecado", client_ip)

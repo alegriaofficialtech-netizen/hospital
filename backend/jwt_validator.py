@@ -122,10 +122,17 @@ ROLE_MAPPING: Dict[str, str] = {
     "ROLE_PATHOLOGIST": "ROLE_PATHOLOGIST",
     "auditor": "ROLE_SECURITY_AUDITOR",
     "ROLE_SECURITY_AUDITOR": "ROLE_SECURITY_AUDITOR",
+    "sgsi-admin": "ROLE_PLATFORM_ADMIN",
+    "administrador": "ROLE_PLATFORM_ADMIN",
+    "ROLE_PLATFORM_ADMIN": "ROLE_PLATFORM_ADMIN",
 }
 
 # Operaciones cl?nicas y sus pol?ticas de menor privilegio
 CLINICAL_ACTIONS = frozenset({"CREATE_ORDER", "VALIDATE_ORDER", "VIEW_ORDERS"})
+
+# Acciones que solo puede ejecutar una persona con MFA acreditada. Una cuenta
+# de servicio queda excluida igual que en las acciones clinicas.
+HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES"})
 
 CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "CREATE_ORDER": {
@@ -147,6 +154,11 @@ CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
         "required_roles": {"ROLE_SECURITY_AUDITOR"},
         "require_mfa": False,
         "description": "Acceso a registros de auditor?a y cadena inmutable",
+    },
+    "MANAGE_IDENTITIES": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": "Administracion de identidades sinteticas de la plataforma",
     },
 }
 
@@ -513,7 +525,7 @@ def enforce_clinical_action(context: ClinicalAuthContext, action: str) -> None:
         raise InsufficientPermissionsError(f"Acci?n cl?nica desconocida o no autorizada: {action}")
 
     # Las cuentas de servicio (M2M) quedan restringidas a auditor?a, nunca a acciones cl?nicas.
-    if action in CLINICAL_ACTIONS and context.is_service_account:
+    if (action in CLINICAL_ACTIONS or action in HUMAN_ONLY_ACTIONS) and context.is_service_account:
         raise InsufficientPermissionsError(
             f"Cuenta de servicio '{context.username}' no autorizada para acciones cl?nicas '{action}'."
         )

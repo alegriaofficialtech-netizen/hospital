@@ -421,9 +421,12 @@ if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
 else
   # Component-aware expectations. The component's own port must be free and
   # the ports it depends on must already be listening.
+  # Cada componente libera solo su propio puerto. El puerto de otro componente
+  # no bloquea: reiniciar el backend con el frontend en marcha es legitimo.
   case "$COMPONENT" in
-    backend)  FREE_PORTS=(8010 4200); LISTEN_PORTS=(8085) ;;
-    frontend) FREE_PORTS=(4200);     LISTEN_PORTS=(8085 8010) ;;
+    keycloak) FREE_PORTS=(8085);        LISTEN_PORTS=() ;;
+    backend)  FREE_PORTS=(8010);        LISTEN_PORTS=(8085) ;;
+    frontend) FREE_PORTS=(4200);        LISTEN_PORTS=(8085 8010) ;;
     *)        FREE_PORTS=(8085 8010 4200); LISTEN_PORTS=() ;;
   esac
   conflict=""
@@ -483,6 +486,10 @@ if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
 else
   # Component-aware: only the dependencies of the component about to start may
   # be running, and the component itself must not be running yet.
+  # Dependencias por componente: Keycloak no depende de nadie, el backend
+  # depende de Keycloak y el frontend depende de ambos. Un componente
+  # dependiente puede estar arriba o no: reiniciar el backend con el frontend
+  # en marcha es una operacion legitima.
   want_keycloak=0
   want_backend=0
   case "$COMPONENT" in
@@ -490,20 +497,24 @@ else
     frontend) want_keycloak=1; want_backend=1 ;;
   esac
   unexpected=""
-  # Only running containers matter: an exited container of the component
-  # about to start is recreated by compose, not a conflicting state.
-  for n in $RUNNING_NAMES; do
-    if [[ "$n" != "sgsi-zta-f11-keycloak" ]] || (( want_keycloak == 0 )); then
-      unexpected="${unexpected} ${n}"
-    fi
-  done
+  # Solo el componente que se va a arrancar debe estar detenido.
+  case "$COMPONENT" in
+    keycloak)
+      if grep -q 'sgsi-zta-f11-keycloak' <<<"$RUNNING_NAMES"; then
+        unexpected="${unexpected} keycloak(already-running)"
+      fi
+      ;;
+    frontend)
+      if grep -q 'sgsi-zta-f11-frontend' <<<"$RUNNING_NAMES"; then
+        unexpected="${unexpected} frontend(already-running)"
+      fi
+      ;;
+  esac
   if (( want_keycloak == 1 )) && ! grep -q 'sgsi-zta-f11-keycloak' <<<"$RUNNING_NAMES"; then
     unexpected="${unexpected} keycloak(missing)"
   fi
-  if (( want_backend == 1 )); then
-    if (( BACKEND_ACTIVE == 0 )); then unexpected="${unexpected} backend(missing)"; fi
-  elif (( BACKEND_ACTIVE == 1 )); then
-    unexpected="${unexpected} backend(active)"
+  if (( want_backend == 1 )) && (( BACKEND_ACTIVE == 0 )); then
+    unexpected="${unexpected} backend(missing)"
   fi
   if [[ -n "$unexpected" ]]; then
     record stack FAIL "present" "unexpected state for component '$COMPONENT':${unexpected}"

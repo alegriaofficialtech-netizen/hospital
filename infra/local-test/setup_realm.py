@@ -715,6 +715,11 @@ class BrowserFlow:
                     "state": state,
                     "code_challenge": challenge,
                     "code_challenge_method": "S256",
+                    # El aprovisionamiento detecta las pantallas por marcadores
+                    # en ingles. Con el realm en espanol esas cadenas no
+                    # aparecen, asi que el flujo se fuerza a ingles. La
+                    # experiencia del usuario sigue en espanol.
+                    "kc_locale": "en",
                 }
             )
         )
