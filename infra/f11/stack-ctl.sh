@@ -85,8 +85,10 @@ backend_pid() {
 start_keycloak() {
   echo "== start keycloak =="
   compose up -d --no-build keycloak
-  if ! wait_for_http "$KEYCLOAK_URL/realms/master" 120; then
-    die "keycloak did not answer on $KEYCLOAK_URL within 120s"
+  # The JVM needs ~65 s to boot on this host and the realm bootstrap adds
+  # more, so the readiness wait is generous on purpose.
+  if ! wait_for_http "$KEYCLOAK_URL/realms/master" 300; then
+    die "keycloak did not answer on $KEYCLOAK_URL within 300s"
   fi
   echo "   keycloak is up on $KEYCLOAK_URL"
 }
