@@ -59,6 +59,7 @@ docker run --rm \
   --memory "$BUILD_MEM" \
   --memory-swap "$BUILD_MEM" \
   --pids-limit "$BUILD_PIDS" \
+  --label com.sgsi-zta.component=f11-build \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \
   -e CI=1 \
