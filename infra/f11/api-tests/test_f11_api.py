@@ -152,12 +152,21 @@ class F11ApiSuite(unittest.TestCase):
         """Mint an access token through the real OIDC flow."""
         if username not in self._tokens:
             user = self.users[username]
-            flow = self.setup_realm.BrowserFlow(
-                self.keycloak_url, self.realm, self.client_id, self.redirect_uri
-            )
-            result = flow.login(
-                username, user["password"], user.get("totp_secret")
-            )
+            # Un codigo TOTP solo sirve una vez por ventana de 30 s. Si otra
+            # suite lo acaba de consumir, se espera a la ventana siguiente.
+            for attempt in range(2):
+                flow = self.setup_realm.BrowserFlow(
+                    self.keycloak_url, self.realm, self.client_id, self.redirect_uri
+                )
+                try:
+                    result = flow.login(
+                        username, user["password"], user.get("totp_secret")
+                    )
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    if attempt == 1 or "authorization code" not in str(exc):
+                        raise
+                    time.sleep(32)
             self._tokens[username] = result["access_token"]
         return self._tokens[username]
 
