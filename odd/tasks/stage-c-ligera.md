@@ -59,9 +59,11 @@ Out of scope:
 |---|---|---|
 | T1 | Add the `api` stage to the preflight gate | done |
 | T2 | Independent component lifecycle without systemd | done |
-| T3 | API suite: JWT, RBAC, MFA TOTP, audit | done, not yet executed |
+| T3 | API suite: JWT, RBAC, MFA TOTP, audit | done, passing 12/12 against the live stack |
 | T4 | Manual UI procedure over the SSH tunnel | done |
 | T5 | Document the lightweight Stage C | done |
+| T6 | Stage C1: Keycloak plus the synthetic realm | done |
+| T7 | Stage C2: the Python backend under supervision | done |
 
 ## Route declaration
 
@@ -93,6 +95,39 @@ Out of scope:
   orders, laboratory reads them, the pathologist validates with TOTP evidence,
   the pathologist without MFA is refused with `MFA_AUTHENTICATION_REQUIRED`,
   and the auditor reads the immutable trail where every denial must appear.
+
+## Stage C1 and C2 evidence
+
+C1, Keycloak alone, supervised at the 88 C ceiling: the preflight allowed the
+host, the container started with real limits (1.0 CPU, 1 GiB, 512 pids), the
+JVM took 63.5 s to boot, the realm was recreated with its five synthetic
+users, and `medico.test` obtained an `otp` AMR while `medico.sinmfa` did not.
+A fresh token carried `alg=RS256`, its `kid` was in the JWKS and its signature
+was verified against the published RSA key. `credentials.json` was written
+with mode 0600 outside the repository.
+
+C2, the Python backend alone: the host was cooled to 82 C before the
+preflight, the gate admitted it with `--component backend`, and the process
+started in 10 s with 34 MiB RSS, one thread, CPU affinity to core 0 and a
+2 GiB address-space limit. The API suite passed 12/12 against the live stack,
+the audit chain reported `audit_chain_valid: true` with the MFA denial and
+the MFA-backed validation both present, and the backend's own validator
+accepted the real token and rejected a tampered signature, a tampered
+payload, a truncated token and plain garbage.
+
+Two defects were found and fixed during C2 rather than worked around:
+
+- the Keycloak readiness wait was 120 s while the JVM needs about 65 s plus
+  the realm bootstrap, so the first start reported failure five seconds
+  before the service answered (commit 5f19511);
+- the API suite stored the shared order id on the instance, and unittest
+  builds a fresh instance per test method, so the MFA tests raised
+  AttributeError (commit b5e8384).
+
+Two design corrections were also required: the `up` stage had to become
+component-aware so a running Keycloak does not block the backend, and the
+`api` stage had to stop requiring the frontend, which the API suite never
+uses (commit 857e7a7).
 
 ## Acceptance criteria
 

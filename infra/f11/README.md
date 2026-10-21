@@ -305,6 +305,19 @@ infra/f11/stack-ctl.sh status
 Keycloak, backend, frontend. The frontend is always started with
 `--no-build`, so this stack never compiles on the host.
 
+The backend can also be started under thermal supervision, with an abort
+that stops the backend and leaves Keycloak untouched:
+
+```bash
+infra/f11/build-monitor.sh --temp-fail 88 --psi-fail 75 --mem-fail 1024 \
+  --abort-command "./infra/f11/stack-ctl.sh stop backend" -- \
+  ./infra/f11/stack-ctl.sh start backend
+```
+
+`--abort-command` exists because the backend is a host process, not a
+labelled container: the monitor cannot stop it by label, so it needs an
+explicit command.
+
 ### API suite: JWT, RBAC, MFA TOTP, audit
 
 ```bash
@@ -418,9 +431,22 @@ infra/f11/preflight-gate.sh --stage api
 | Stage | When | Requires |
 |---|---|---|
 | `build` | before Stage A compiles | free ports, no F11 stack, compile headroom |
-| `up` | before any component starts | free ports, no F11 stack, no backend |
-| `api` | before the API suite runs | the stack is up, `credentials.json`, keycloak + frontend images |
+| `up` | before any component starts | depends on `--component`, see below |
+| `api` | before the API suite runs | Keycloak and the backend are up, `credentials.json`, keycloak + frontend images |
 | `e2e` | before the Playwright suite runs | the stack is up, `credentials.json`, `e2e-secrets.json`, the Playwright image |
+
+The `up` stage takes `--component`, because the components start one at a
+time and each one has different dependencies:
+
+```bash
+infra/f11/preflight-gate.sh --stage up --component keycloak   # 8085 free, nothing running
+infra/f11/preflight-gate.sh --stage up --component backend    # 8085 listening, 8010 free
+infra/f11/preflight-gate.sh --stage up --component frontend   # 8085 listening, 4200 free
+```
+
+`stack-ctl.sh start <component>` passes the matching `--component` itself. The
+`api` stage requires Keycloak and the backend but not the frontend: it
+exercises the API only.
 
 Exit codes: `0` allowed (warnings permitted), `1` refused, `2` usage error.
 State is kept in `$F11_RUNTIME_DIR/state/preflight.env` (boot id, OOM counter,
