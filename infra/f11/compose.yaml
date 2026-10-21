@@ -44,9 +44,12 @@ services:
 
   frontend:
     image: sgsi-zta-f11-frontend:local
+    # Built by infra/f11/build-images.sh from Stage A artifacts.
+    # Dockerfile.prebuilt only copies frontend/.f11-dist/browser (no compile);
+    # Angular is compiled separately under cgroup limits by build-artifacts.sh.
     build:
       context: ../../frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prebuilt
     container_name: sgsi-zta-f11-frontend
     network_mode: host
     restart: "no"

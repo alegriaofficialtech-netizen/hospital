@@ -25,3 +25,6 @@ infra/f11/.env
 infra/f11/backend.env
 !infra/f11/.env.example
 !infra/f11/backend.env.example
+
+# F11 Stage A build artifacts (never commit)
+frontend/.f11-dist/

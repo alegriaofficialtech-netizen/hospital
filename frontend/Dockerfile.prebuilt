@@ -1,0 +1,12 @@
+# Runtime image built from artifacts produced by infra/f11/build-artifacts.sh.
+#
+# No compilation happens here. Angular is compiled in a cgroup-limited
+# container (Stage A) and this file only packages the result (Stage B), so the
+# host never runs an unconstrained `ng build`.
+#
+# frontend/Dockerfile remains the reference multi-stage build for CI, where a
+# dedicated builder is assumed.
+FROM caddy:2.11-alpine
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY .f11-dist/browser /usr/share/caddy
+EXPOSE 4200

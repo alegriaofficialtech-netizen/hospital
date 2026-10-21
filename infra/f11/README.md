@@ -238,12 +238,14 @@ After F11 is running and healthy:
 ./infra/f11/run-e2e.sh
 ```
 
-`run-e2e.sh` refuses to run unless load is below `2.0` and `MemAvailable` is at
-least `3 GiB`. It runs the Python E2E with the host venv, then builds and runs an
-ephemeral Playwright container from `frontend/e2e.Dockerfile` using
-`node:22-bookworm-slim`, `--network host`, and CPU/RAM/PID limits. No global Node
-is installed. `F11_CHROMIUM_NO_SANDBOX=1` is used only for the isolated root test
-container.
+`run-e2e.sh` delegates admission control to `infra/f11/preflight-gate.sh
+--stage e2e` (see "Preflight gate"): CPU pressure, load normalised by core
+count, memory, swap, temperature, host stability and stack state. It then runs
+the Python E2E with the host venv, and runs the prebuilt Playwright container
+`sgsi-zta-f11-e2e:local` with `--network host` and CPU/RAM/PID limits. Build and
+test are separate stages: `infra/f11/build-images.sh` produces that image once,
+so a test run never compiles anything. No global Node is installed.
+`F11_CHROMIUM_NO_SANDBOX=1` is used only for the isolated root test container.
 
 E2E inputs:
 
@@ -253,15 +255,162 @@ E2E inputs:
 - `F11_SECRETS_FILE` default `$F11_RUNTIME_DIR/e2e-secrets.json`
 - `F11_RUNTIME_DIR` default `/home/elcra/sgsi-zta-runtime/f11`
 
-The first Playwright container build downloads npm dependencies and Chromium; it
-is deferred until the CPU-pressure gate is clear.
+The first Playwright image build downloads npm dependencies and Chromium. It is
+a one-time Stage B step (`build-images.sh`), gated and skippable when the image
+is already present.
 
+## Preflight gate
+
+`infra/f11/preflight-gate.sh` is the single admission control for every F11
+stage. It replaced the previous `load1 < 2.0` check in `run-e2e.sh`.
+
+### Why the old gate was miscalibrated
+
+`load1` counts runnable and uninterruptible tasks and is **not normalised by the
+number of CPUs**. servidor-1 is an Intel i7-6500U (2 physical cores, 4 threads,
+15 W TDP) that also runs roughly 600 tasks and 95 containers. Measured over a
+3 h window:
+
+| Signal | Measured |
+|---|---|
+| `load1` | min **2.29** · p10 3.30 · avg 4.76 · p90 6.26 · max 8.10 |
+| samples with `load1 < 2.0` | **0 of 181 (0 %)** |
+| CPU busy | avg 58.1 % (p10 51.3 %, p90 62.6 %) |
+| PSI cpu `some avg60` | 20.6 % |
+| PSI memory `some avg60` | 0.0 % |
+| MemAvailable | 4.5–4.7 GiB |
+
+The old gate refused **every** run while the host still had measurable CPU and
+memory headroom, and it would have refused forever: a 4-thread host doing real
+work has a structural load floor above 2.0. A fixed load number is not portable
+across machines and cannot distinguish "busy because 95 containers have a
+heartbeat" from "saturated".
+
+### Signals and thresholds
+
+Blocking signals are marked **B**, advisory ones **A**.
+
+| Signal | Source | build | up | e2e |
+|---|---|---|---|---|
+| **B** CPU pressure `some avg60` | `/proc/pressure/cpu` | fail > 55 % · warn > 35 % | fail > 45 % · warn > 30 % | fail > 45 % · warn > 30 % |
+| **B** load15 / nproc | `/proc/loadavg` | fail > 1.5× · warn > 1.0× | fail > 1.5× · warn > 1.0× | fail > 1.5× · warn > 1.0× |
+| **B** load trend | `load1` vs `load15` | fail if `load1 > 1.8×load15` **and** `load1 > nproc` | same | same |
+| **B** MemAvailable | `/proc/meminfo` | fail < 4096 MiB · warn < 5120 MiB | fail < 3584 MiB | fail < 3072 MiB (same 3 GiB floor as before) |
+| **B** swap used | `/proc/meminfo` | fail > 25 % · warn > 10 % | same | same |
+| **B** swap activity | `pswpout` delta / 5 s | fail > 1024 pg · warn > 128 pg | same | same |
+| **B** temperature | `/sys/class/thermal` | fail > 92 °C · warn > 84 °C | fail > 90 °C · warn > 82 °C | fail > 90 °C · warn > 82 °C |
+| **B** I/O pressure | `/proc/pressure/io` | fail > 25 % | fail > 20 % | fail > 20 % |
+| **B** uptime | `/proc/uptime` | fail < 600 s | same | same |
+| **B** reboot continuity | `boot_id` vs state | fail on change unless `--allow-reboot`; **always fails** if a run was marked active | same | same |
+| **B** OOM continuity | `oom_kill` vs state | fail on any new kill | same | same |
+| **B** ports | `ss -ltn` | 8085/8010/4200 must be **free** | must be **free** | must be **listening** |
+| **B** stack state | docker labels | must be **down** | must be **down** | keycloak + frontend + backend **up** |
+| **B** container restarts | `RestartCount` | — | — | fail if any F11 container restarted |
+| **B** inputs | credentials/secrets | — | — | readable + schema-valid |
+| **B** images | `docker image inspect` | — | — | keycloak + frontend + e2e present |
+| **B** disk free | `statfs` | fail < 10 GiB | fail < 8 GiB | fail < 5 GiB |
+| **A** CPU busy (5 s) | `/proc/stat` | warn > 75 % · never blocks | warn > 70 % | warn > 70 % |
+
+Raw CPU utilisation never blocks. A 5 s sample catches legitimate bursts and
+says nothing about whether tasks actually stalled; PSI and the normalised load15
+are the signals that answer that question. The first implementation *did* block
+on utilisation and produced a false refusal at 91 % busy while PSI sat at 20 %,
+which is exactly the failure mode this gate must not have.
+
+### Stages and usage
+
+```bash
+# collect evidence without blocking (always exits 0)
+infra/f11/preflight-gate.sh --stage up --report
+
+# machine readable
+infra/f11/preflight-gate.sh --stage e2e --json
+
+# enforce
+infra/f11/preflight-gate.sh --stage build
+```
+
+Exit codes: `0` allowed (warnings permitted), `1` refused, `2` usage error.
+State is kept in `$F11_RUNTIME_DIR/state/preflight.env` (boot id, OOM counter,
+last result) and `run-active` (written during an E2E run, removed on exit).
+A leftover `run-active` from a run that died without cleanup is reported as
+`run_marker FAIL`; inspect the run, then delete the file deliberately.
+
+### Staged build
+
+Compilation and testing are separate, and the compiler runs under real cgroup
+limits because `docker build` cannot be limited through the stable CLI.
+
+| Stage | Command | What runs | Limits |
+|---|---|---|---|
+| A — compile | `infra/f11/build-artifacts.sh` | `npm ci` + `ng build` in a container | `--cpus 2.0 --memory 3g --memory-swap 3g --pids-limit 512`, `NODE_OPTIONS=--max-old-space-size=2048` |
+| B — package | `infra/f11/build-images.sh` | runtime image from `.f11-dist/browser`; e2e image only if missing | runtime build is seconds; e2e build is one-time and cached |
+| C — start | `preflight-gate.sh --stage up` then `docker compose up -d` + `systemctl start` | keycloak + frontend + backend | compose limits: 1.0/1024M, 0.25/128M, systemd `CPUQuota=50%` / `MemoryMax=512M` |
+| D — test | `infra/f11/run-e2e.sh` | Python API E2E, then Playwright | Playwright `--cpus 1.0 --memory 1g --pids-limit 256` |
+
+Stage A writes `frontend/.f11-dist/browser` (gitignored, and **not** excluded by
+`frontend/.dockerignore`, unlike `dist/`). `frontend/Dockerfile.prebuilt` only
+copies it; `frontend/Dockerfile` remains the reference multi-stage build for CI.
+
+For the one unlimit-able step (Playwright image build), opt into a dedicated
+BuildKit daemon that runs inside a limited container:
+
+```bash
+infra/f11/build-images.sh --rebuild-e2e --limited-e2e-builder
+docker buildx rm sgsi-zta-f11-builder   # when done
+```
+
+The builder is created under a fixed name and is **not** made the default, so
+other projects keep their builder.
+
+### Thermal note
+
+`x86_pkg_temp` sits at 80–86 °C with the host at ~47 % CPU busy. That is a
+15 W laptop-class package with little thermal headroom, which is why the gate
+warns at 82 °C and refuses at 90 °C. Expect the temperature warning during any
+build; it is not a failure by itself, but a sustained rise above 90 °C must stop
+the run.
+
+### Safe procedure (Angular + Python + Keycloak)
+
+```bash
+cd /home/elcra/sgsi-zta-integration
+
+# 0. host must be acceptable for compilation
+infra/f11/preflight-gate.sh --stage build
+
+# 1. compile (Stage A) -- no docker build involved
+infra/f11/build-artifacts.sh
+
+# 2. package (Stage B)
+infra/f11/build-images.sh
+
+# 3. prepare E2E inputs
+infra/f11/prepare-e2e-secrets.sh          # writes $F11_RUNTIME_DIR/e2e-secrets.json
+#    credentials.json is produced by the realm bootstrap; verify its schema with
+#    the gate (--stage e2e) before starting anything.
+
+# 4. host must accept the stack
+infra/f11/preflight-gate.sh --stage up
+
+# 5. start the stack (explicit, never automatic)
+docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml up -d
+sudo systemctl start sgsi-zta-f11-backend
+
+# 6. verify and test
+infra/f11/health-check.sh
+infra/f11/run-e2e.sh
+
+# 7. stop
+sudo systemctl stop sgsi-zta-f11-backend
+docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml down
+```
 ## Known limitations
 
 - The intermittent Keycloak AMR behavior is unresolved. Do not claim full
   real-stack validation until the remote E2E is re-run and the evidence is
   captured.
-- The first frontend build downloads npm packages; it is deferred.
+- The Angular build is staged and cgroup-limited; see "Staged build".
 - The backend systemd unit is prepared but not installed or enabled.
 - The remote E2E paths and ports must be adapted to F11 before the full suite is
   considered valid.

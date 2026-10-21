@@ -9,17 +9,22 @@ API_URL="${F11_API_BASE_URL:-http://127.0.0.1:8010}"
 BASE_URL="${F11_BASE_URL:-http://127.0.0.1:4200}"
 AUDIENCE="${KEYCLOAK_AUDIENCE:-clinical-poc-api}"
 
-load1="$(awk '{print $1}' /proc/loadavg)"
-mem_available_kib="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
+STATE_DIR="$RUNTIME/state"
 
-if ! awk -v load="$load1" 'BEGIN { exit !(load < 2.0) }'; then
-  echo "refusing E2E: load average $load1 is not below 2.0" >&2
-  exit 1
-fi
-if (( mem_available_kib < 3145728 )); then
-  echo "refusing E2E: MemAvailable ${mem_available_kib} KiB is below 3 GiB" >&2
-  exit 1
-fi
+# Admission control: CPU pressure (PSI), memory, swap, temperature, host
+# stability (reboot / OOM continuity), port and stack state.
+# The former `load1 < 2.0` check was removed after measurement: on this 4-thread
+# host load1 never dropped below 2.29 in a 3 h window (0/181 samples), so it
+# refused every run while the host still had CPU headroom. See
+# infra/f11/README.md, section "Preflight gate".
+"$ROOT/infra/f11/preflight-gate.sh" --stage e2e
+
+# Mark the run active so a reboot mid-run is detected by the next gate run
+# instead of being silently forgotten.
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR" 2>/dev/null || true
+cat /proc/sys/kernel/random/boot_id > "$STATE_DIR/run-active"
+trap 'rm -f "$STATE_DIR/run-active"' EXIT
 
 for file in "$CREDENTIALS" "$SECRETS"; do
   if [[ ! -r "$file" ]]; then
@@ -38,7 +43,14 @@ echo "== Python API E2E: real Keycloak login, JWT claims, RBAC, TOTP/MFA, clinic
   --audience "$AUDIENCE"
 
 echo "== Playwright UI E2E: Angular + Keycloak login, TOTP, RBAC route guards, clinical flow =="
-docker build -f "$ROOT/frontend/e2e.Dockerfile" -t sgsi-zta-f11-e2e:local "$ROOT/frontend"
+# The E2E image is built by infra/f11/build-images.sh (Stage B), never here:
+# build and test must not share a step, otherwise a compile failure is reported
+# as a test failure and the run pollutes the measured window.
+if ! docker image inspect sgsi-zta-f11-e2e:local >/dev/null 2>&1; then
+  echo "missing image sgsi-zta-f11-e2e:local" >&2
+  echo "run infra/f11/build-images.sh first" >&2
+  exit 1
+fi
 docker run --rm \
   --network host \
   --ipc=host \
