@@ -66,7 +66,9 @@ STAGE="up"
 COMPONENT="all"
 MODE="enforce"
 JSON=0
-ALLOW_REBOOT=0
+# A reboot caused by the host itself (not by F11) is accepted when the
+# operator says so, either with --allow-reboot or with F11_ALLOW_REBOOT=1.
+ALLOW_REBOOT="${F11_ALLOW_REBOOT:-0}"
 
 MAX_TEMP_C=0
 MAX_TEMP_ZONE=""

@@ -462,6 +462,7 @@ limits because `docker build` cannot be limited through the stable CLI.
 | Stage | Command | What runs | Limits |
 |---|---|---|---|
 | A — compile | `infra/f11/build-artifacts.sh` | `npm ci` + `ng build` in a container | `--cpus 2.0 --memory 3g --memory-swap 3g --pids-limit 512`, `NODE_OPTIONS=--max-old-space-size=2048` |
+| A — compile (light) | `infra/f11/build-artifacts.sh --reuse-node-modules` | `ng build` against the host tree, mounted read only | `--cpus 0.5 --memory 3g --memory-swap 3g --pids-limit 512` |
 | B — package | `infra/f11/build-images.sh` | runtime image from `.f11-dist/browser`; e2e image only if missing | runtime build is seconds; e2e build is one-time and cached |
 | C — start | `preflight-gate.sh --stage up` then `docker compose up -d` + `systemctl start` | keycloak + frontend + backend | compose limits: 1.0/1024M, 0.25/128M, systemd `CPUQuota=50%` / `MemoryMax=512M` |
 | D — test | `infra/f11/run-e2e.sh` | Python API E2E, then Playwright | Playwright `--cpus 1.0 --memory 1g --pids-limit 256` |
@@ -510,6 +511,57 @@ tuning:
 - generate the image on a cooler machine and move it as an uncompressed
   `docker save` stream, which avoids gzip decompression here but is slower;
 - free thermal headroom by stopping the other stacks this host runs.
+
+### Watching for a build window
+
+`infra/f11/thermal-watcher.sh` waits for a genuinely quiet window and records
+that it found one. It is read only: it reads `/sys` and `/proc`, writes to its
+own log and marker, and never builds, starts or stops anything.
+
+```bash
+# waits up to 30 minutes for a window, then reports
+infra/f11/thermal-watcher.sh --minutes 3 --timeout 1800
+
+# evidence
+cat /home/elcra/sgsi-zta-runtime/f11/thermal-watcher.csv
+cat /home/elcra/sgsi-zta-runtime/f11/thermal-window.marker
+```
+
+A window is N **continuous** minutes with the CPU package at or below
+`--temp-max` (default 76 C) and the host at or below `--busy-max` (default
+25 %). One sample that breaks either condition resets the streak, so three
+isolated samples never count as a window. Exit code 0 means a window was
+detected, 1 means it was not.
+
+The watcher does not authorise a build. It only tells the operator that the
+machine is quiet enough to consider one.
+
+### A lighter Stage A
+
+`build-artifacts.sh --reuse-node-modules` skips `npm ci` and compiles against
+the `node_modules` tree already on the host, mounted **read only**. Before
+compiling anything, `infra/f11/check-node-modules.py` verifies that the tree
+matches `package-lock.json`, that the platform binaries are the ones the build
+image needs, and that the Node version of the image satisfies the Angular
+CLI engines. If any of that fails the build is refused and the original
+method must be used.
+
+```bash
+# compatibility only: no build, no image, no gate
+infra/f11/build-artifacts.sh --reuse-node-modules --check-only
+
+# compile with the reused tree, 0.5 CPU by default
+infra/f11/build-artifacts.sh --reuse-node-modules
+F11_BUILD_CPUS=1.0 infra/f11/build-artifacts.sh --reuse-node-modules
+```
+
+The Angular CLI cache now lives in `frontend/.angular/cache` instead of
+`node_modules/.cache`, so the dependency tree can stay read only.
+
+**A lower quota is not a proportional thermal saving.** Less power means a
+lower peak, but the compile takes proportionally longer, so the time spent
+hot and the total energy are not reduced in the same proportion. Only a
+measurement can tell; the option exists to be measured, not to be assumed.
 
 ### Safe procedure (Angular + Python + Keycloak)
 
