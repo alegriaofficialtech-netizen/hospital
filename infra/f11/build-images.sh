@@ -2,7 +2,10 @@
 # Stage B -- package prebuilt artifacts into images. Never compiles Angular.
 #
 # B1  runtime image  : copies frontend/.f11-dist/browser into Caddy. Seconds.
-# B2  e2e image      : Playwright + Chromium. Heavy, cached, only built when
+# B2  e2e image      : derives from the official Playwright image, which already
+#                      carries the browsers and their system dependencies. No
+#                      apt install and no browser download happen here, so the
+#                      build is small and thermally cheap. Only built when
 #                      missing (or with --rebuild-e2e).
 #
 # `docker build` cannot be cgroup-limited through the stable CLI. For B2 you can
@@ -29,6 +32,14 @@ E2E_IMAGE="${F11_E2E_IMAGE:-sgsi-zta-f11-e2e:local}"
 BUILDER="${F11_E2E_BUILDER:-sgsi-zta-f11-builder}"
 BUILDER_MEM="${F11_E2E_BUILDER_MEM:-3g}"
 BUILDER_QUOTA="${F11_E2E_BUILDER_CPU_QUOTA:-200000}"
+
+# The official Playwright image must match the runner in the lock exactly,
+# because playwright-core pins the browser build revision.
+PW_VERSION="$(python3 -c "import json;d=json.load(open('$FRONTEND/package-lock.json'));print(d['packages']['node_modules/@playwright/test']['version'])")"
+if [[ -z "$PW_VERSION" ]]; then
+  echo "cannot read @playwright/test version from package-lock.json" >&2
+  exit 1
+fi
 
 REBUILD_E2E=0
 LIMITED=0
@@ -60,7 +71,7 @@ echo
 if (( REBUILD_E2E == 0 )) && docker image inspect "$E2E_IMAGE" >/dev/null 2>&1; then
   echo "== B2: $E2E_IMAGE already present, skipped (use --rebuild-e2e to force) =="
 else
-  echo "== B2: e2e image $E2E_IMAGE (Playwright + Chromium; one-time, cached in layers) =="
+  echo "== B2: e2e image $E2E_IMAGE (from official Playwright v${PW_VERSION}-noble) =="
   if (( LIMITED == 1 )); then
     echo "   limited BuildKit builder: $BUILDER (mem=${BUILDER_MEM} cpu-quota=${BUILDER_QUOTA})"
     if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
@@ -71,6 +82,7 @@ else
     fi
     docker buildx build \
       --builder "$BUILDER" \
+      --build-arg "PLAYWRIGHT_VERSION=$PW_VERSION" \
       --load \
       -f "$FRONTEND/e2e.Dockerfile" \
       -t "$E2E_IMAGE" \
@@ -79,6 +91,7 @@ else
     echo "   note: plain docker build runs unconstrained on the daemon;"
     echo "         pass --limited-e2e-builder for a cgroup-limited builder."
     docker build \
+      --build-arg "PLAYWRIGHT_VERSION=$PW_VERSION" \
       -f "$FRONTEND/e2e.Dockerfile" \
       -t "$E2E_IMAGE" \
       "$FRONTEND"

@@ -371,20 +371,27 @@ warns at 82 °C and refuses at 90 °C. Expect the temperature warning during any
 build; it is not a failure by itself, but a sustained rise above 90 °C must stop
 the run.
 
-Measured during the first Stage B2 attempt (Playwright image, buildkitd limited
-to `memory=3g` and `cpu-quota=200000`): `x86_pkg_temp` went from 73 C to 93 C in
-about 110 s, with 8 samples at or above 88 C and swings of 10 C between
-consecutive 5 s samples as the fan cycled. The supervised abort fired at 88 C
-sustained, removed the builder, and the image was never produced.
+Four supervised attempts measured the same wall, each with a different workload:
 
-Two consequences. First, a two-core buildkitd is too hot for this package: the
-thermal ceiling, not CPU or memory, is the binding constraint for B2. Second,
-killing the builder destroys its cache, so an aborted attempt loses every
-completed layer and the next one starts from scratch.
+| Attempt | Workload | Duration | Peak | Samples >= 88 C |
+| --- | --- | --- | --- | --- |
+| 1 | buildkitd 2 cores, node base + apt + Chromium download | 113 s | 93 C | 8 |
+| 2 | buildkitd 1 core, same Dockerfile | 78 s | 90 C | 4 |
+| 3 | buildkitd 1 core, official Playwright base (pull + export) | 129 s | 93 C | 6 |
+| 4 | plain `docker pull` of the official image, no build at all | 71 s | 93 C | 4 |
 
-If B2 is retried, reduce the builder to one core
-(`F11_E2E_BUILDER_CPU_QUOTA=100000`) and supervise with the same wrapper. It
-will take roughly twice as long but should stay under the ceiling.
+The variable is the host, not the workload. Attempt 4 is the decisive one: merely
+transferring the official image, with no compiler and no apt, breaches the
+ceiling. Ingesting roughly 2 GB is itself a thermal event on this package.
+
+Consequently B2 cannot complete under an 88 C abort ceiling and the Playwright
+image does not exist. The alternatives are operator decisions, not build-script
+tuning:
+
+- raise the ceiling to about 95 C for the one-time transfer (Tjmax is 100 C);
+- generate the image on a cooler machine and move it as an uncompressed
+  `docker save` stream, which avoids gzip decompression here but is slower;
+- free thermal headroom by stopping the other stacks this host runs.
 
 ### Safe procedure (Angular + Python + Keycloak)
 
