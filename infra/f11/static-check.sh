@@ -13,9 +13,14 @@ import ast
 import pathlib
 import sys
 
-root = pathlib.Path("backend")
+roots = [
+    pathlib.Path("backend"),
+    pathlib.Path("tests/e2e"),
+    pathlib.Path("infra/local-test"),
+]
 files = sorted(
     path
+    for root in roots
     for path in root.rglob("*.py")
     if ".venv" not in path.parts and "__pycache__" not in path.parts
 )
@@ -33,6 +38,36 @@ PY
 
 echo "== python dependency consistency =="
 backend/.venv/bin/python -m pip check
+
+echo "== shell syntax =="
+for script in infra/f11/*.sh; do
+  bash -n "$script"
+done
+echo "shell syntax OK"
+
+echo "== F11 backend env JSON =="
+if [[ -r infra/f11/backend.env ]]; then
+  (
+    set -a
+    # shellcheck disable=SC1091
+    . infra/f11/backend.env
+    set +a
+    python3 - <<'PY'
+import json
+import os
+
+raw = os.environ.get("IOMT_DEVICE_KEYS_JSON")
+if not raw:
+    raise SystemExit("IOMT_DEVICE_KEYS_JSON is missing")
+data = json.loads(raw)
+if not isinstance(data, dict) or not data:
+    raise SystemExit("IOMT_DEVICE_KEYS_JSON must be a non-empty object")
+print(f"env JSON OK: {len(data)} device(s)")
+PY
+  )
+else
+  echo "skipped: infra/f11/backend.env not present"
+fi
 
 echo "== compose model =="
 docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml config --quiet

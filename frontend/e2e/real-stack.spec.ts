@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const REPO_ROOT = path.resolve(process.cwd(), '..');
-const CREDENTIALS_FILE = path.join(
-  REPO_ROOT,
-  'infra/local-test/.test-credentials.local.json',
-);
-const SECRETS_FILE = path.join(REPO_ROOT, 'infra/local-test/runtime/backend-secrets.json');
+const CREDENTIALS_FILE =
+  process.env.F11_CREDENTIALS_FILE ??
+  path.join(REPO_ROOT, 'infra/local-test/.test-credentials.local.json');
+const SECRETS_FILE =
+  process.env.F11_SECRETS_FILE ??
+  path.join(REPO_ROOT, 'infra/local-test/runtime/backend-secrets.json');
+const API_BASE_URL = process.env.F11_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
 interface LocalCredentials {
   users: Record<string, { password: string; totp_secret?: string }>;
@@ -17,7 +19,7 @@ interface LocalCredentials {
 function readJson<T>(file: string): T {
   if (!fs.existsSync(file)) {
     throw new Error(
-      `Missing ${file}. Start the local stack with infra/local-test/start-local.ps1 first.`,
+      `Missing ${file}. Start the stack or set F11_CREDENTIALS_FILE/F11_SECRETS_FILE.`,
     );
   }
   return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
@@ -158,7 +160,7 @@ test('local real stack: admission, TOTP release, audit, denied access', async ({
       .createHmac('sha256', secrets.iomtDeviceKey)
       .update(signingInput)
       .digest('hex');
-    const response = await request.post('http://127.0.0.1:8000/api/v1/iomt/results', {
+    const response = await request.post(`${API_BASE_URL}/api/v1/iomt/results`, {
       data: body,
       headers: {
         'Content-Type': 'application/json',

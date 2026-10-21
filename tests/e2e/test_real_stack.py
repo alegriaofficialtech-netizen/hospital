@@ -14,9 +14,11 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sys
 import time
@@ -40,6 +42,22 @@ def check(condition: bool, message: str) -> None:
     if not condition:
         raise TestFailure(message)
     print(f"  PASS {message}")
+
+
+def decode_jwt(token: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    try:
+        header_b64, payload_b64, _ = token.split(".")
+    except ValueError as exc:
+        raise TestFailure("access token is not a three-part JWT") from exc
+
+    def decode_part(part: str) -> Dict[str, Any]:
+        padding = "=" * (-len(part) % 4)
+        try:
+            return json.loads(base64.urlsafe_b64decode(part + padding).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise TestFailure("access token contains invalid base64 JSON") from exc
+
+    return decode_part(header_b64), decode_part(payload_b64)
 
 
 def api(
@@ -183,6 +201,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument(
+        "--audience",
+        default=os.environ.get("KEYCLOAK_AUDIENCE", "clinical-poc-api"),
+        help="Expected access-token audience for the F11 Keycloak client.",
+    )
+    parser.add_argument(
         "--credentials",
         type=Path,
         default=REPO_ROOT / "infra/local-test/.test-credentials.local.json",
@@ -217,6 +240,19 @@ def main() -> int:
     print("== Reception role ==")
     reception = login(credentials, "recepcion.test", base_url=args.base_url)
     reception_claims = reception["claims"]
+    reception_header, raw_reception_claims = decode_jwt(reception["access_token"])
+    check(reception_header.get("alg") == "RS256", "access token uses RS256")
+    check(
+        raw_reception_claims.get("iss") == credentials["issuer"],
+        "access token issuer matches realm",
+    )
+    audience_claim = raw_reception_claims.get("aud")
+    audiences = [audience_claim] if isinstance(audience_claim, str) else (audience_claim or [])
+    check(args.audience in audiences, f"access token audience contains {args.audience}")
+    check(
+        raw_reception_claims.get("azp") == credentials["clientId"],
+        "access token azp matches client",
+    )
     check("admision" in reception_claims["realm_access"]["roles"], "reception token has admision role")
     expect_status(
         api(args.base_url, "GET", "/api/v1/orders", token=reception["access_token"]),
@@ -343,6 +379,8 @@ def main() -> int:
         "medico" in no_mfa["claims"]["realm_access"]["roles"],
         "pathologist-without-MFA token has medico role",
     )
+    no_mfa_amr = [str(item).lower() for item in no_mfa["claims"].get("amr", [])]
+    check("otp" not in no_mfa_amr, "pathologist-without-MFA token has no otp AMR")
     expect_status(
         api(
             args.base_url,
@@ -357,6 +395,10 @@ def main() -> int:
     )
 
     print("== Pathologist with real TOTP ==")
+    check(
+        bool(credentials["users"]["medico.test"].get("totp_secret")),
+        "medico.test has a real TOTP secret",
+    )
     pathologist = login_with_amr(
         credentials, "medico.test", base_url=args.base_url, required_amr="otp"
     )

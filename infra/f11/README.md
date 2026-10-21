@@ -210,6 +210,52 @@ working copy as an untracked file. It is only useful for an iframe-based
 `check-sso` optimization; it did not fix the intermittent AMR issue and is not
 part of F11.
 
+## E2E preparation
+
+The E2E suite has two real checks. Neither uses simulated MFA:
+
+1. Python direct API E2E (`tests/e2e/test_real_stack.py`) obtains tokens through
+   Keycloak Authorization Code + PKCE, completes the real TOTP challenge, checks
+   JWT `alg`, `iss`, `aud`, and `azp`, then exercises RBAC and the full clinical
+   release flow.
+2. Playwright UI E2E (`frontend/e2e/real-stack.spec.ts`) signs in through Angular,
+   completes the real TOTP challenge, and verifies route guards, admission,
+   IoMT ingestion, medical release, audit, and denied access.
+
+Prepare the E2E device secret from the ignored backend environment:
+
+```bash
+./infra/f11/prepare-e2e-secrets.sh
+```
+
+This writes `/home/elcra/sgsi-zta-runtime/f11/e2e-secrets.json` with mode `0600`.
+Realm provisioning writes `/home/elcra/sgsi-zta-runtime/f11/credentials.json`.
+
+After F11 is running and healthy:
+
+```bash
+./infra/f11/health-check.sh
+./infra/f11/run-e2e.sh
+```
+
+`run-e2e.sh` refuses to run unless load is below `2.0` and `MemAvailable` is at
+least `3 GiB`. It runs the Python E2E with the host venv, then builds and runs an
+ephemeral Playwright container from `frontend/e2e.Dockerfile` using
+`node:22-bookworm-slim`, `--network host`, and CPU/RAM/PID limits. No global Node
+is installed. `F11_CHROMIUM_NO_SANDBOX=1` is used only for the isolated root test
+container.
+
+E2E inputs:
+
+- `F11_BASE_URL` default `http://127.0.0.1:4200`
+- `F11_API_BASE_URL` default `http://127.0.0.1:8010`
+- `F11_CREDENTIALS_FILE` default `$F11_RUNTIME_DIR/credentials.json`
+- `F11_SECRETS_FILE` default `$F11_RUNTIME_DIR/e2e-secrets.json`
+- `F11_RUNTIME_DIR` default `/home/elcra/sgsi-zta-runtime/f11`
+
+The first Playwright container build downloads npm dependencies and Chromium; it
+is deferred until the CPU-pressure gate is clear.
+
 ## Known limitations
 
 - The intermittent Keycloak AMR behavior is unresolved. Do not claim full
