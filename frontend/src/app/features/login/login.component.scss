@@ -1,0 +1,116 @@
+.login-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--mat-sys-primary) 14%, transparent), transparent 45%),
+    var(--mat-sys-surface-container-low);
+}
+
+.login-card {
+  width: min(560px, 100%);
+  padding: 0.5rem;
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  color: var(--mat-sys-primary);
+}
+
+.brand-icon {
+  font-size: 2.5rem;
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.demo-notice {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--mat-sys-tertiary);
+  background: var(--mat-sys-surface-container-high);
+  border-radius: 0.25rem;
+  font: var(--mat-sys-body-small);
+}
+
+.full-width {
+  width: 100%;
+}
+
+.section-label {
+  margin: 1.25rem 0 0.5rem;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-label-large);
+}
+
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.role-button {
+  justify-content: flex-start;
+  text-align: left;
+  height: auto;
+  padding: 0.6rem 0.75rem;
+
+  .role-copy {
+    display: grid;
+    gap: 0.1rem;
+    margin-left: 0.25rem;
+  }
+
+  small {
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-small);
+    white-space: normal;
+  }
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0;
+  color: var(--mat-sys-on-surface-variant);
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--mat-sys-outline-variant);
+  }
+}
+
+.keycloak-button {
+  height: 44px;
+}
+
+.error {
+  margin: 1rem 0 0;
+  color: var(--mat-sys-error);
+  font: var(--mat-sys-body-medium);
+}
+
+.mock-hint {
+  margin: 1.25rem 0 0;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-small);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.mock-hint code {
+  font-size: 0.8rem;
+}
+
+@media (max-width: 480px) {
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+}

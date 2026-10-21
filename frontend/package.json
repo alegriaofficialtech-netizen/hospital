@@ -11,6 +11,7 @@
   "private": true,
   "packageManager": "npm@10.9.8",
   "dependencies": {
+    "@angular/animations": "^22.2.3",
     "@angular/cdk": "^22.2.3",
     "@angular/common": "^22.2.0",
     "@angular/compiler": "^22.2.0",
@@ -19,6 +20,7 @@
     "@angular/material": "^22.2.3",
     "@angular/platform-browser": "^22.2.0",
     "@angular/router": "^22.2.0",
+    "keycloak-js": "^26.2.4",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

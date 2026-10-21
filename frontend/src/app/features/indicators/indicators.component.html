@@ -1,0 +1,130 @@
+<section class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Operational indicators</h1>
+      <p class="page-subtitle">Computed metrics from synthetic orders and audit events.</p>
+    </div>
+    <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
+      <mat-icon>refresh</mat-icon>
+      Refresh
+    </button>
+  </header>
+
+  @if (error(); as message) {
+    <div class="inline-error" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ message }}</span>
+    </div>
+  }
+
+  @if (loading()) {
+    <div class="loading-row">
+      <mat-spinner diameter="32" />
+      <span>Calculating indicators…</span>
+    </div>
+  }
+
+  <div class="kpi-grid">
+    <mat-card class="kpi-card">
+      <mat-icon class="kpi-icon">science</mat-icon>
+      <span class="kpi-label">Total orders</span>
+      <strong class="kpi-value">{{ canViewOrders() ? totalOrders() : '—' }}</strong>
+      <span class="kpi-hint">
+        {{ canViewOrders() ? 'Synthetic sample volume' : 'Clinical role required' }}
+      </span>
+    </mat-card>
+
+    <mat-card class="kpi-card">
+      <mat-icon class="kpi-icon success">task_alt</mat-icon>
+      <span class="kpi-label">Validation rate</span>
+      <strong class="kpi-value">{{ canViewOrders() ? validationRate() + '%' : '—' }}</strong>
+      <span class="kpi-hint">
+        {{ canViewOrders() ? releasedCount() + ' released reports' : 'Clinical role required' }}
+      </span>
+    </mat-card>
+
+    <mat-card class="kpi-card">
+      <mat-icon class="kpi-icon warning">pending_actions</mat-icon>
+      <span class="kpi-label">Awaiting validation</span>
+      <strong class="kpi-value">{{ canViewOrders() ? analyzedCount() : '—' }}</strong>
+      <span class="kpi-hint">
+        {{ canViewOrders() ? 'ANALYZED orders' : 'Clinical role required' }}
+      </span>
+    </mat-card>
+
+    <mat-card class="kpi-card">
+      <mat-icon class="kpi-icon">receipt_long</mat-icon>
+      <span class="kpi-label">Audit events</span>
+      <strong class="kpi-value">{{ auditEvents() ?? '—' }}</strong>
+      <span class="kpi-hint">
+        {{ isAuditor() ? 'Hash-chained records' : 'Auditor role required' }}
+      </span>
+    </mat-card>
+  </div>
+
+  @if (!canViewOrders()) {
+    <mat-card class="chart-card">
+      <div class="card-heading">
+        <div>
+          <h2>Clinical order indicators restricted</h2>
+          <p>
+            The Security Auditor role can inspect the hash-chained audit trail but cannot read
+            clinical orders. Use the Audit trail for record-level evidence.
+          </p>
+        </div>
+      </div>
+    </mat-card>
+  } @else {
+  <div class="charts-grid">
+    <mat-card class="chart-card">
+      <div class="card-heading">
+        <div>
+          <h2>Status distribution</h2>
+          <p>Share of orders by workflow state.</p>
+        </div>
+      </div>
+
+      <div class="status-list">
+        @for (slice of statusDistribution(); track slice.status) {
+          <div class="status-row">
+            <div class="status-copy">
+              <span>{{ slice.status | orderStatus }}</span>
+              <strong>{{ slice.count }} · {{ slice.percent }}%</strong>
+            </div>
+            <mat-progress-bar
+              mode="determinate"
+              [value]="slice.percent"
+              [class]="'status-' + slice.slug"
+            />
+          </div>
+        }
+      </div>
+    </mat-card>
+
+    <mat-card class="chart-card">
+      <div class="card-heading">
+        <div>
+          <h2>Daily volume</h2>
+          <p>Orders grouped by creation date.</p>
+        </div>
+      </div>
+
+      @if (dailyVolume().length) {
+        <div class="volume-chart" role="img" aria-label="Daily order volume chart">
+          @for (day of dailyVolume(); track day.date) {
+            <div class="volume-column">
+              <span class="volume-value">{{ day.count }}</span>
+              <div class="volume-track">
+                <div class="volume-bar" [style.height.%]="day.height"></div>
+              </div>
+              <span class="volume-date">{{ day.date.slice(5) }}</span>
+            </div>
+          }
+        </div>
+      } @else {
+        <p class="empty-state">No orders available for the daily volume.</p>
+      }
+    </mat-card>
+  </div>
+  }
+</section>

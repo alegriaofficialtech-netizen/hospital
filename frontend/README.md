@@ -1,59 +1,110 @@
-# Frontend
+# SGSI-ZTA Hospital Lab — Frontend
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.3.
+Angular 22 standalone application with Angular Material 22 for the hospital laboratory
+Zero Trust workflow. The first frontend phase runs entirely on synthetic mock data and can be
+switched to the real Python/Keycloak backend through environment flags.
 
-## Development server
+> **Synthetic data only.** Orders, patients, DNIs and audit events are fictional
+> (`DEMO-0001`, `ORD-2026-0001`). Do not load real clinical data into this phase.
 
-To start a local development server, run:
+## Requirements
 
-```bash
-ng serve
+- Node.js 22.22+ (or 24.15+)
+- npm 10+
+- Windows PowerShell (commands below)
+
+## Run in mock mode (default)
+
+```powershell
+cd C:\Users\elcra\Desktop\SGSI-ZTA-Integration\frontend
+npm install
+npm start
 ```
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+Open `http://localhost:4200`. The login screen offers four demo roles:
 
-## Code scaffolding
+| Role | Access |
+| --- | --- |
+| Reception | Admission and order creation |
+| Laboratory | Dashboard and indicators |
+| Pathologist | Medical validation with simulated MFA |
+| Security Auditor | Audit chain and indicators |
 
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+Demo authentication is stored in `sessionStorage` only. No tokens, passwords or real identities
+are persisted. Clinical validation in demo mode requires pressing **Simulate MFA verification**
+on the Medical validation screen.
 
-```bash
-ng generate component component-name
+Mock mode is controlled by `src/environments/environment.ts`:
+
+```ts
+useMockApi: true,
+useMockAuth: true,
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+The mock API interceptor answers `/api/v1/orders`, `/api/v1/orders/validate`,
+`/api/v1/audit/events` and `/health` with a 250 ms delay, the same paths and payloads as the
+backend, and simulated `401/403/404/409` errors.
 
-```bash
-ng generate --help
+## Run against the real backend
+
+1. Start the backend on `http://127.0.0.1:8000`.
+2. Start Keycloak and import/configure the `hospital-lab` realm with the public client
+   `clinical-poc` (no client secret).
+3. Edit `src/environments/environment.ts`:
+
+```ts
+useMockApi: false,
+useMockAuth: false,
+apiBaseUrl: '',
 ```
 
-## Building
+4. Run `npm start`. The dev server proxies `/api` and `/health` to `http://127.0.0.1:8000`
+   using `proxy.conf.json`, so no CORS configuration is required.
+5. Use **Sign in with Keycloak**. The client uses authorization code flow with PKCE
+   (`S256`), `check-sso`, and no login iframe.
 
-To build the project run:
+Keycloak settings live in `src/environments/environment.ts` and
+`src/environments/environment.prod.ts`. The production file contains the placeholder issuer
+`https://servidor-1.tailb0f78a.ts.net:8443`; replace it with the deployed public issuer before
+building. Production builds replace `environment.ts` automatically through `fileReplacements`
+in `angular.json`.
 
-```bash
-ng build
+## Backend contract used
+
+| Method | Path | Roles |
+| --- | --- | --- |
+| GET | `/health` | Public |
+| GET | `/api/v1/orders` | Reception, Lab, Pathologist |
+| POST | `/api/v1/orders` | Reception |
+| POST | `/api/v1/orders/validate` | Pathologist + MFA |
+| GET | `/api/v1/audit/events` | Security Auditor |
+
+Workflow: `CREATED` → `SAMPLE_COLLECTED` → `ANALYZED` → `VALIDATED_AND_RELEASED`.
+The backend creates orders directly as `SAMPLE_COLLECTED`.
+
+## Tests and build
+
+```powershell
+npm test -- --watch=false
+npm run build
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+Tests use Vitest with jsdom, configured by Angular 22 through `@angular/build:unit-test`.
+The suite covers auth state, mock API rules, status badges, dashboard role behavior, the app
+root and functional guards.
 
-## Running unit tests
+The initial production bundle is approximately 679 kB raw / 149 kB transfer. The scaffold
+budget is raised to 750 kB warning because Angular Material is part of the initial shell;
+the error budget remains 1 MB. Keycloak is lazy-loaded in its own chunk.
 
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+## Project layout
 
-```bash
-ng test
 ```
-
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
+src/app/
+  core/            models, auth (signals, guards, interceptor), API + mock API
+  layout/          responsive toolbar/sidenav shell
+  features/        login, dashboard, admission, doctor, audit, indicators
+  shared/          status badge and status label pipe
+src/environments/  dev and production flags
+proxy.conf.json    /api and /health -> 127.0.0.1:8000
 ```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.

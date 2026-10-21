@@ -1,0 +1,74 @@
+<div class="login-page">
+  <mat-card class="login-card">
+    <mat-card-header>
+      <div class="brand-row">
+        <mat-icon class="brand-icon">local_hospital</mat-icon>
+        <div>
+          <mat-card-title>SGSI-ZTA Hospital Lab</mat-card-title>
+          <mat-card-subtitle>Zero Trust clinical workflow</mat-card-subtitle>
+        </div>
+      </div>
+    </mat-card-header>
+
+    <mat-card-content>
+      <p class="demo-notice">
+        Demo mode uses synthetic data only. Validation requires a simulated MFA step.
+      </p>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Username</mat-label>
+        <input
+          matInput
+          name="username"
+          autocomplete="username"
+          [(ngModel)]="username"
+          placeholder="demo.reception"
+        />
+        <mat-icon matSuffix>person</mat-icon>
+      </mat-form-field>
+
+      <p class="section-label">Demo roles</p>
+      <div class="role-grid">
+        @for (item of demoRoles; track item.role) {
+          <button
+            mat-stroked-button
+            type="button"
+            class="role-button"
+            (click)="loginDemo(item.role)"
+          >
+            <mat-icon>{{ item.icon }}</mat-icon>
+            <span class="role-copy">
+              <strong>{{ item.label }}</strong>
+              <small>{{ item.description }}</small>
+            </span>
+          </button>
+        }
+      </div>
+
+      @if (keycloakEnabled) {
+        <div class="divider"><span>or</span></div>
+
+        <button
+          mat-flat-button
+          color="primary"
+          type="button"
+          class="full-width keycloak-button"
+          [disabled]="loading()"
+          (click)="loginWithKeycloak()"
+        >
+          <mat-icon>login</mat-icon>
+          Sign in with Keycloak
+        </button>
+      } @else {
+        <p class="mock-hint">
+          Keycloak is disabled while demo authentication is enabled. Set
+          <code>useMockAuth: false</code> to use the real issuer.
+        </p>
+      }
+
+      @if (error(); as message) {
+        <p class="error" role="alert">{{ message }}</p>
+      }
+    </mat-card-content>
+  </mat-card>
+</div>

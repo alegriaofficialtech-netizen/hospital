@@ -1,0 +1,39 @@
+.order-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.submit-button {
+  height: 56px;
+}
+
+.table-heading {
+  align-items: flex-start;
+}
+
+.filter-field {
+  width: 220px;
+}
+
+@media (max-width: 900px) {
+  .order-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .submit-button {
+    grid-column: 1 / -1;
+    height: 44px;
+  }
+}
+
+@media (max-width: 600px) {
+  .order-form {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-field {
+    width: 100%;
+  }
+}

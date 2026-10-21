@@ -1,0 +1,48 @@
+.audit-kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.chain-invalid {
+  border-left: 4px solid var(--mat-sys-error);
+}
+
+.table-heading {
+  align-items: flex-start;
+}
+
+.filters {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+
+  mat-form-field {
+    width: 180px;
+  }
+}
+
+.details-cell {
+  max-width: 320px;
+  white-space: normal;
+}
+
+.mfa-chip {
+  --mat-chip-elevated-container-color: #d7f2df;
+  --mat-chip-label-text-color: #0f4d22;
+  --mat-chip-outline-width: 0;
+}
+
+.no-mfa-chip {
+  --mat-chip-elevated-container-color: #ececec;
+  --mat-chip-label-text-color: #333333;
+  --mat-chip-outline-width: 0;
+}
+
+@media (max-width: 700px) {
+  .audit-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .filters mat-form-field {
+    width: 100%;
+  }
+}

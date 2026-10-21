@@ -1,0 +1,164 @@
+<section class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Medical validation</h1>
+      <p class="page-subtitle">
+        Review analyzed orders and release reports with a simulated MFA step.
+      </p>
+    </div>
+    <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
+      <mat-icon>refresh</mat-icon>
+      Refresh
+    </button>
+  </header>
+
+  <div class="synthetic-banner">
+    <mat-icon>science</mat-icon>
+    <span>Synthetic clinical data only. No real patient information is stored or displayed.</span>
+  </div>
+
+  @if (error(); as message) {
+    <div class="inline-error" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ message }}</span>
+    </div>
+  }
+
+  @if (loading()) {
+    <div class="loading-row">
+      <mat-spinner diameter="32" />
+      <span>Loading analyzed orders…</span>
+    </div>
+  }
+
+  <div class="validation-layout">
+    <mat-card class="list-card">
+      <div class="card-heading">
+        <div>
+          <h2>Analyzed orders</h2>
+          <p>{{ orders().length }} pending report(s).</p>
+        </div>
+      </div>
+
+      @if (orders().length) {
+        <mat-action-list>
+          @for (order of orders(); track order.order_id) {
+            <button
+              mat-list-item
+              type="button"
+              [class.selected-order]="order.order_id === selectedId()"
+              (click)="select(order)"
+            >
+              <span matListItemTitle>{{ order.order_id }}</span>
+              <span matListItemLine>{{ order.patient_dni }} · {{ order.test_type }}</span>
+            </button>
+          }
+        </mat-action-list>
+      } @else if (!loading()) {
+        <p class="empty-state">No analyzed orders are waiting for validation.</p>
+      }
+    </mat-card>
+
+    <mat-card class="detail-card">
+      @if (selected(); as order) {
+        <div class="detail-heading">
+          <div>
+            <h2>{{ order.order_id }}</h2>
+            <p>{{ order.patient_dni }} · {{ order.test_type }}</p>
+          </div>
+          <app-order-status-badge [status]="order.status" />
+        </div>
+
+        <dl class="order-meta">
+          <div>
+            <dt>Created by</dt>
+            <dd>{{ order.created_by }}</dd>
+          </div>
+          <div>
+            <dt>Created at</dt>
+            <dd>{{ order.created_at | date: 'medium' }}</dd>
+          </div>
+          <div>
+            <dt>Version</dt>
+            <dd>v{{ order.version }}</dd>
+          </div>
+        </dl>
+
+        <h3>Measurements</h3>
+        @if (measurements().length) {
+          <div class="measurement-grid">
+            @for (measurement of measurements(); track measurement.key) {
+              <div class="measurement">
+                <span>{{ measurement.label }}</span>
+                <strong>{{ measurement.value }}</strong>
+              </div>
+            }
+          </div>
+        } @else {
+          <p class="empty-state">This order has no measurements.</p>
+        }
+
+        <mat-form-field appearance="outline" class="full-width observations-field">
+          <mat-label>Observations</mat-label>
+          <textarea
+            matInput
+            rows="4"
+            [value]="observations()"
+            (input)="onObservationsInput($event)"
+            placeholder="Synthetic analytical observations"
+          ></textarea>
+        </mat-form-field>
+
+        <div class="mfa-panel" [class.verified]="mfaVerified()">
+          <div class="mfa-copy">
+            <mat-icon>{{ mfaVerified() ? 'verified' : 'security' }}</mat-icon>
+            <div>
+              <strong>Multi-factor authentication</strong>
+              <p>
+                @if (mfaVerified()) {
+                  Synthetic MFA verified for this session.
+                } @else {
+                  Validation is blocked until MFA is simulated.
+                }
+              </p>
+            </div>
+          </div>
+          @if (mfaVerified()) {
+            <mat-chip-set>
+              <mat-chip highlighted>MFA verified</mat-chip>
+            </mat-chip-set>
+          } @else {
+            <button mat-stroked-button type="button" (click)="simulateMfa()">
+              Simulate MFA verification
+            </button>
+          }
+        </div>
+
+        @if (actionError(); as message) {
+          <div class="inline-error" role="alert">
+            <mat-icon>error_outline</mat-icon>
+            <span>{{ message }}</span>
+          </div>
+        }
+
+        <div class="actions">
+          <button
+            mat-flat-button
+            color="primary"
+            type="button"
+            [disabled]="!mfaVerified() || validating()"
+            (click)="validate()"
+          >
+            <mat-icon>{{ validating() ? 'hourglass_top' : 'task_alt' }}</mat-icon>
+            {{ validating() ? 'Validating…' : 'Validate and release' }}
+          </button>
+        </div>
+      } @else {
+        <div class="empty-detail">
+          <mat-icon>biotech</mat-icon>
+          <p>Select an analyzed order to review its measurements.</p>
+        </div>
+      }
+    </mat-card>
+  </div>
+</section>

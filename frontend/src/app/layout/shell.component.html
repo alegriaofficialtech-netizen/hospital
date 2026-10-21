@@ -1,0 +1,57 @@
+<mat-sidenav-container class="app-container">
+  <mat-sidenav
+    #sidenav
+    class="app-sidenav"
+    [mode]="isMobile() ? 'over' : 'side'"
+    [opened]="sidenavOpen()"
+    (openedChange)="sidenavOpen.set($event)"
+  >
+    <div class="brand">
+      <mat-icon class="brand-icon">local_hospital</mat-icon>
+      <div>
+        <strong>SGSI-ZTA</strong>
+        <span>Hospital Lab</span>
+      </div>
+    </div>
+
+    <mat-nav-list>
+      @for (item of navItems(); track item.route) {
+        <a
+          mat-list-item
+          [routerLink]="item.route"
+          routerLinkActive="active-link"
+          (click)="onNavigate()"
+        >
+          <mat-icon matListItemIcon>{{ item.icon }}</mat-icon>
+          <span matListItemTitle>{{ item.label }}</span>
+        </a>
+      }
+    </mat-nav-list>
+
+    <div class="sidenav-footer">
+      <span class="role-label">{{ roleLabel() }}</span>
+      <span class="mode-label">Synthetic demo data</span>
+    </div>
+  </mat-sidenav>
+
+  <mat-sidenav-content class="app-content">
+    <mat-toolbar class="app-toolbar">
+      <button mat-icon-button type="button" aria-label="Toggle navigation" (click)="sidenav.toggle()">
+        <mat-icon>menu</mat-icon>
+      </button>
+      <span class="app-title">SGSI-ZTA Hospital Lab</span>
+      <span class="toolbar-spacer"></span>
+      <mat-chip-set class="user-chip" aria-label="Signed in user">
+        <mat-chip highlighted>{{ initials() }}</mat-chip>
+      </mat-chip-set>
+      <span class="username">{{ user()?.displayName }}</span>
+      <button mat-icon-button type="button" aria-label="Sign out" (click)="logout()">
+        <mat-icon>logout</mat-icon>
+      </button>
+    </mat-toolbar>
+
+    <main class="page-container">
+      <router-outlet />
+    </main>
+  </mat-sidenav-content>
+</mat-sidenav-container>

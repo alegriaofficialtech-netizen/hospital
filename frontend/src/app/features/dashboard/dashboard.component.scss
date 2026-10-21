@@ -1,0 +1,32 @@
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.kpi-icon.warning {
+  color: #9a5b00;
+}
+
+.kpi-icon.success,
+.text-success {
+  color: #146c2e;
+}
+
+.text-danger {
+  color: var(--mat-sys-error);
+}
+
+@media (max-width: 700px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -12,4 +12,5 @@ coverage/
 .venv/
 backend/.venv/
 frontend/.venv/
+backend/data/
 recovered/**/*.tar.gz
