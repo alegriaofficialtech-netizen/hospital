@@ -63,7 +63,7 @@ export class AdminService {
   }
 
   listRoles(): Observable<RealmRole[]> {
-    return this.http.get<{ roles: RealmRole[] }>('/api/v1/admin/roles').pipe(mapRoles());
+    return this.http.get<{ roles: RealmRole[] }>('/api/v1/admin/roles').pipe(map((payload) => payload.roles));
   }
 
   createIdentity(payload: {

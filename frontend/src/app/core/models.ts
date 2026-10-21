@@ -2,7 +2,7 @@ export type UserRole =
   | 'ROLE_RECEPTION'
   | 'ROLE_LAB_TECH'
   | 'ROLE_PATHOLOGIST'
-  | 'ROLE_SECURITY_AUDITOR';
+  | 'ROLE_SECURITY_AUDITOR' | 'ROLE_PLATFORM_ADMIN';;
 
 export const USER_ROLES: readonly UserRole[] = [
   'ROLE_RECEPTION',
@@ -16,6 +16,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   ROLE_LAB_TECH: 'Técnico de laboratorio',
   ROLE_PATHOLOGIST: 'Patólogo',
   ROLE_SECURITY_AUDITOR: 'Auditor de seguridad',
+  ROLE_PLATFORM_ADMIN: 'Administrador de plataforma',
 };
 
 export type OrderStatus =

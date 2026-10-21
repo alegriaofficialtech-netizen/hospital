@@ -14,11 +14,13 @@ import {
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { AdminService, ClinicalIdentity, IdentitySummary } from '../../core/api/admin.service';
+import { firstValueFrom } from 'rxjs';
+import { AdminService, ClinicalIdentity, IdentitySummary } from '../core/api/admin.service';
 
 interface ClinicalRole {
   name: string;
@@ -40,6 +42,7 @@ interface ClinicalRole {
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
+    MatProgressSpinnerModule,
     MatSelectModule,
     MatSnackBarModule,
     MatTableModule,
@@ -117,8 +120,8 @@ export class AdminUsersComponent {
     this.loading.set(true);
     try {
       const [identities, summary] = await Promise.all([
-        this.admin.listIdentities(),
-        this.admin.summary(),
+        firstValueFrom(this.admin.listIdentities()),
+        firstValueFrom(this.admin.summary()),
       ]);
       this.identities.set(identities);
       this.summary.set(summary);
@@ -172,11 +175,11 @@ export class AdminUsersComponent {
     }
     this.creating.set(true);
     try {
-      const result = await this.admin.createIdentity({
+      const result = await firstValueFrom(this.admin.createIdentity({
         username: this.newUsername().trim(),
         roles: this.newRoles(),
         require_mfa: this.newRequiresMfa(),
-      });
+      }));
       this.newUsername.set('');
       this.newRoles.set([]);
       await this.load();
@@ -201,7 +204,7 @@ export class AdminUsersComponent {
       return;
     }
     try {
-      await this.admin.setIdentityState(identity.id, { enabled });
+      await firstValueFrom(this.admin.setIdentityState(identity.id, { enabled }));
       await this.load();
       this.notify(`Cuenta ${action}ada.`);
     } catch (error) {
@@ -219,7 +222,7 @@ export class AdminUsersComponent {
       return;
     }
     try {
-      const result = await this.admin.resetPassword(identity.id);
+      const result = await firstValueFrom(this.admin.resetPassword(identity.id));
       await this.load();
       this.notify(`Credencial nueva en ${result.credential_file}.`);
     } catch (error) {
