@@ -20,6 +20,9 @@
 #   F11_BUILD_PIDS=512     process ceiling (npm spawns many workers)
 #   F11_NODE_HEAP_MB=2048  Node old-space ceiling, must stay below F11_BUILD_MEM
 #   F11_NODE_IMAGE=node:22-bookworm-slim
+#   F11_BUILD_SOURCEMAPS=0 source maps are off for the F11 static build;
+#                           set to 1 to keep them for debugging (adds ~5.7 MB
+#                           of .map files to the runtime image)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,6 +35,11 @@ BUILD_PIDS="${F11_BUILD_PIDS:-512}"
 NODE_HEAP_MB="${F11_NODE_HEAP_MB:-2048}"
 NODE_IMAGE="${F11_NODE_IMAGE:-node:22-bookworm-slim}"
 OUT_DIR=".f11-dist"
+if [[ "${F11_BUILD_SOURCEMAPS:-0}" == "1" ]]; then
+  SOURCE_MAP_FLAG="--source-map=true"
+else
+  SOURCE_MAP_FLAG="--source-map=false"
+fi
 
 SKIP_GATE=0
 while [[ $# -gt 0 ]]; do
@@ -48,7 +56,7 @@ if (( SKIP_GATE == 0 )); then
   "$GATE" --stage build
 fi
 
-echo "== Stage A: Angular build (cpus=${BUILD_CPUS} mem=${BUILD_MEM} pids=${BUILD_PIDS} heap=${NODE_HEAP_MB}M) =="
+echo "== Stage A: Angular build (cpus=${BUILD_CPUS} mem=${BUILD_MEM} pids=${BUILD_PIDS} heap=${NODE_HEAP_MB}M sourcemaps=${F11_BUILD_SOURCEMAPS:-0}) =="
 
 rm -rf "${FRONTEND:?}/$OUT_DIR"
 
@@ -69,9 +77,17 @@ docker run --rm \
   -v "$FRONTEND:/app" \
   -w /app \
   "$NODE_IMAGE" \
-  sh -c "npm ci --no-audit --no-fund && npm run build -- --configuration local-real --output-path=$OUT_DIR"
+  sh -c "npm ci --no-audit --no-fund && npm run build -- --configuration local-real --output-path=$OUT_DIR $SOURCE_MAP_FLAG"
 
 elapsed=$(( $(date +%s) - started ))
+
+if [[ "${F11_BUILD_SOURCEMAPS:-0}" != "1" ]]; then
+  maps="$(find "$FRONTEND/$OUT_DIR" -name '*.map' | wc -l)"
+  if [[ "$maps" -ne 0 ]]; then
+    echo "build emitted $maps source maps despite --source-map=false" >&2
+    exit 1
+  fi
+fi
 
 INDEX="$FRONTEND/$OUT_DIR/browser/index.html"
 if [[ ! -f "$INDEX" ]]; then
