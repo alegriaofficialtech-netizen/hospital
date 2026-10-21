@@ -5,7 +5,7 @@
         <mat-icon class="brand-icon">local_hospital</mat-icon>
         <div>
           <mat-card-title>SGSI-ZTA Hospital Lab</mat-card-title>
-          <mat-card-subtitle>Zero Trust clinical workflow</mat-card-subtitle>
+          <mat-card-subtitle>Flujo clínico Zero Trust</mat-card-subtitle>
         </div>
       </div>
     </mat-card-header>
@@ -13,9 +13,12 @@
     <mat-card-content>
       @if (keycloakEnabled) {
         <p class="demo-notice">
-          Real mode uses the isolated local Keycloak realm with synthetic users. The
-          pathologist must complete a TOTP challenge before validation.
+          Modo real: la autenticación se delega por completo en el Keycloak aislado
+          (<code>{{ keycloakUrl }}</code>, realm <code>{{ realm }}</code>) con usuarios
+          sintéticos. El patólogo debe superar el desafío TOTP para poder validar.
         </p>
+
+        <div class="divider"><span>Acceso</span></div>
 
         <button
           mat-flat-button
@@ -26,20 +29,43 @@
           (click)="loginWithKeycloak()"
         >
           <mat-icon>login</mat-icon>
-          Sign in with Keycloak
+          Acceder con Keycloak
         </button>
 
+        @if (initError(); as message) {
+          <p class="error" role="alert">{{ message }}</p>
+        }
+
+        @if (error(); as message) {
+          <p class="error" role="alert">{{ message }}</p>
+        }
+
+        <p class="section-label">Roles clínicos del realm {{ realm }}</p>
+        <div class="role-grid">
+          @for (item of clinicalRoles; track item.role) {
+            <div class="role-card">
+              <mat-icon>{{ item.icon }}</mat-icon>
+              <span class="role-copy">
+                <strong>{{ item.label }}</strong>
+                <small>{{ item.description }}</small>
+                <small class="role-requirement">{{ item.requirement }}</small>
+              </span>
+            </div>
+          }
+        </div>
+
         <p class="mock-hint">
-          OIDC Authorization Code + PKCE S256. Demo role shortcuts are intentionally
-          unavailable in this mode.
+          OIDC Authorization Code + PKCE S256 · JWT firmado con RS256 · TOTP obligatorio
+          para validar · auditoría encadenada e inmutable. Los accesos directos de demo
+          están desactivados en modo real: el único acceso válido es el de Keycloak.
         </p>
       } @else {
         <p class="demo-notice">
-          Demo mode uses synthetic data only. Validation requires a simulated MFA step.
+          Modo demo: solo datos sintéticos. La validación exige un MFA simulado.
         </p>
 
         <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Username</mat-label>
+          <mat-label>Usuario</mat-label>
           <input
             matInput
             name="username"
@@ -50,7 +76,7 @@
           <mat-icon matSuffix>person</mat-icon>
         </mat-form-field>
 
-        <p class="section-label">Demo roles</p>
+        <p class="section-label">Roles de demo</p>
         <div class="role-grid">
           @for (item of demoRoles; track item.role) {
             <button
@@ -69,13 +95,9 @@
         </div>
 
         <p class="mock-hint">
-          Keycloak is disabled while demo authentication is enabled. Set
-          <code>useMockAuth: false</code> to use the real issuer.
+          Keycloak está desactivado mientras la autenticación demo esté activa. Usa
+          <code>useMockAuth: false</code> para apuntar al emisor real.
         </p>
-      }
-
-      @if (error(); as message) {
-        <p class="error" role="alert">{{ message }}</p>
       }
     </mat-card-content>
   </mat-card>

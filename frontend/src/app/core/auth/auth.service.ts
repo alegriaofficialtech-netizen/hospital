@@ -5,6 +5,33 @@ import { ROLE_LABELS, SessionUser, UserRole, USER_ROLES } from '../models';
 
 const STORAGE_KEY = 'sgsi-zta.session';
 
+/**
+ * Every await against Keycloak is bounded. Without a timeout a failed or
+ * blocked OIDC call left the login button disabled forever with no visible
+ * reason: the promise never settled, so the loading state never cleared.
+ */
+const KEYCLOAK_INIT_TIMEOUT_MS = 10_000;
+const KEYCLOAK_LOGIN_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`el cliente OIDC no respondio en ${ms} ms`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 const ROLE_ALIASES: Record<string, UserRole> = {
   reception: 'ROLE_RECEPTION',
   recepcion: 'ROLE_RECEPTION',
@@ -61,6 +88,9 @@ export class AuthService {
   readonly authMode = computed(() => this._session()?.authMode ?? null);
   readonly isDemoAuth = computed(() => this._session()?.authMode === 'demo');
 
+  /** Why the OIDC client could not be initialised, if it could not be. */
+  readonly keycloakInitError = signal<string | null>(null);
+
   get accessToken(): string | undefined {
     return this.keycloak?.token;
   }
@@ -92,19 +122,28 @@ export class AuthService {
 
   async loginWithKeycloak(): Promise<void> {
     if (environment.useMockAuth) {
-      throw new Error('Keycloak sign-in is disabled while demo authentication is enabled.');
+      throw new Error(
+        'El acceso con Keycloak esta desactivado mientras la autenticacion demo este activa.',
+      );
     }
     await this.initialize();
+    const initError = this.keycloakInitError();
+    if (initError) {
+      throw new Error(initError);
+    }
     if (!this.keycloak) {
-      throw new Error('Keycloak client is not available.');
+      throw new Error('El cliente OIDC de Keycloak no esta disponible.');
     }
     if (this.keycloak.authenticated) {
       this.applyKeycloakSession(this.keycloak);
       return;
     }
-    await this.keycloak.login({
-      redirectUri: `${window.location.origin}/dashboard`,
-    });
+    await withTimeout(
+      this.keycloak.login({
+        redirectUri: `${window.location.origin}/dashboard`,
+      }),
+      KEYCLOAK_LOGIN_TIMEOUT_MS,
+    );
   }
 
   markMfaVerified(): void {
@@ -145,16 +184,25 @@ export class AuthService {
       const { default: KeycloakClient } = await import('keycloak-js');
       const keycloak = new KeycloakClient(environment.keycloak);
       this.keycloak = keycloak;
-      const authenticated = await keycloak.init({
-        onLoad: 'check-sso',
-        pkceMethod: 'S256',
-        checkLoginIframe: false,
-      });
+      const authenticated = await withTimeout(
+        keycloak.init({
+          onLoad: 'check-sso',
+          pkceMethod: 'S256',
+          checkLoginIframe: false,
+        }),
+        KEYCLOAK_INIT_TIMEOUT_MS,
+      );
       if (authenticated) {
         this.applyKeycloakSession(keycloak);
       }
     } catch (error) {
+      // The failure used to be swallowed, so the login button stayed disabled
+      // with no visible reason. The reason is now part of the state.
+      const reason = error instanceof Error ? error.message : String(error);
       console.warn('Keycloak initialization failed.', error);
+      this.keycloakInitError.set(
+        `No se pudo inicializar el cliente OIDC contra ${environment.keycloak.url}: ${reason}`,
+      );
     }
   }
 

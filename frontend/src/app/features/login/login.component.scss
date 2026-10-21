@@ -34,6 +34,10 @@
   background: var(--mat-sys-surface-container-high);
   border-radius: 0.25rem;
   font: var(--mat-sys-body-small);
+
+  code {
+    font-size: 0.8rem;
+  }
 }
 
 .full-width {
@@ -71,12 +75,47 @@
   }
 }
 
+/* Informational card for a clinical role. Not interactive on purpose: the
+   only authentication path in real mode is the Keycloak button. */
+.role-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--mat-sys-outline-variant);
+  border-radius: 0.5rem;
+  background: var(--mat-sys-surface-container-low);
+
+  .role-copy {
+    display: grid;
+    gap: 0.15rem;
+  }
+
+  small {
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-small);
+    white-space: normal;
+  }
+
+  .role-requirement {
+    color: var(--mat-sys-primary);
+    font: var(--mat-sys-label-small);
+  }
+}
+
 .divider {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   margin: 1.25rem 0;
   color: var(--mat-sys-on-surface-variant);
+
+  span {
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-label-medium);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
 
   &::before,
   &::after {
@@ -93,7 +132,11 @@
 
 .error {
   margin: 1rem 0 0;
-  color: var(--mat-sys-error);
+  padding: 0.6rem 0.75rem;
+  border-left: 4px solid var(--mat-sys-error);
+  border-radius: 0.25rem;
+  background: var(--mat-sys-error-container);
+  color: var(--mat-sys-on-error-container);
   font: var(--mat-sys-body-medium);
 }
 

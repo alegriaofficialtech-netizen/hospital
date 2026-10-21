@@ -17,6 +17,18 @@ interface DemoRole {
   icon: string;
 }
 
+/**
+ * Informational card for a clinical role. It is not a login affordance: the
+ * only way into the stack in real mode is the Keycloak button above.
+ */
+interface ClinicalRole {
+  role: UserRole;
+  label: string;
+  description: string;
+  requirement: string;
+  icon: string;
+}
+
 @Component({
   selector: 'app-login',
   standalone: true,
@@ -41,29 +53,71 @@ export class LoginComponent {
   readonly loading = signal(false);
   readonly keycloakEnabled = !environment.useMockAuth;
 
+  /** The real issuer the browser will talk to, shown so the operator can verify it. */
+  readonly keycloakUrl = environment.keycloak.url;
+  readonly realm = environment.keycloak.realm;
+
+  /** Reason the OIDC client could not be initialised, if that happened. */
+  readonly initError = this.auth.keycloakInitError;
+
   readonly demoRoles: readonly DemoRole[] = [
     {
       role: 'ROLE_RECEPTION',
-      label: 'Reception',
-      description: 'Create synthetic orders',
+      label: 'Recepción',
+      description: 'Crear órdenes sintéticas',
       icon: 'assignment_ind',
     },
     {
       role: 'ROLE_LAB_TECH',
-      label: 'Laboratory',
-      description: 'Review collected samples',
+      label: 'Laboratorio',
+      description: 'Revisar muestras recogidas',
       icon: 'science',
     },
     {
       role: 'ROLE_PATHOLOGIST',
-      label: 'Pathologist',
-      description: 'Validate with simulated MFA',
+      label: 'Patólogo',
+      description: 'Validar con MFA simulada',
       icon: 'biotech',
     },
     {
       role: 'ROLE_SECURITY_AUDITOR',
-      label: 'Security Auditor',
-      description: 'Inspect the audit chain',
+      label: 'Auditor de seguridad',
+      description: 'Inspeccionar la cadena de auditoría',
+      icon: 'verified_user',
+    },
+  ];
+
+  /**
+   * The real realm roles, described for the operator. These are the roles
+   * Keycloak grants; the LIS maps them to the RBAC model.
+   */
+  readonly clinicalRoles: readonly ClinicalRole[] = [
+    {
+      role: 'ROLE_RECEPTION',
+      label: 'Recepción (admision)',
+      description: 'Crea la orden preanalítica del paciente.',
+      requirement: 'Sin MFA · puede leer y listar órdenes',
+      icon: 'assignment_ind',
+    },
+    {
+      role: 'ROLE_LAB_TECH',
+      label: 'Laboratorio (laboratorio)',
+      description: 'Consulta las órdenes y sus resultados.',
+      requirement: 'Sin MFA · no puede crear ni validar',
+      icon: 'science',
+    },
+    {
+      role: 'ROLE_PATHOLOGIST',
+      label: 'Patólogo (medico)',
+      description: 'Firma y libera el informe analítico.',
+      requirement: 'MFA TOTP obligatoria · rol mfa-required',
+      icon: 'biotech',
+    },
+    {
+      role: 'ROLE_SECURITY_AUDITOR',
+      label: 'Auditor (auditor)',
+      description: 'Lee la auditoría y verifica la cadena de hashes.',
+      requirement: 'Sin MFA · acceso exclusivo a la auditoría',
       icon: 'verified_user',
     },
   ];
@@ -84,7 +138,9 @@ export class LoginComponent {
       }
     } catch (error) {
       this.error.set(
-        error instanceof Error ? error.message : 'Keycloak sign-in could not be started.',
+        error instanceof Error
+          ? error.message
+          : 'No se pudo iniciar el acceso con Keycloak.',
       );
     } finally {
       this.loading.set(false);
