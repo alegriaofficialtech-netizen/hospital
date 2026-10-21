@@ -166,9 +166,13 @@ policy and came back on their own.
 Measured facts about the reboots: the last five boots ended with **no**
 orderly shutdown events at all, and boots -2 and -1 contain no panic,
 watchdog, thermal, MCE, hardware error or oom-kill entry. The shutdowns left
-no kernel trace, so the cause cannot be established from the logs. What can be
-said is that the host was running between 74 and 92 C of package temperature
-with no throttling and no orderly shutdown, and that it hard-reset.
+no kernel trace, so the logs alone cannot establish the cause.
+
+The operator then stated that the shutdown was **manual**. That is the
+explanation, and it downgrades the earlier reading: these were human power
+cycles, not thermal resets, so they are not evidence of a thermally unstable
+machine. What survives is only that the boots leave no kernel trace, which
+means a future automatic reboot would be hard to explain.
 
 Two consequences for the F11 work:
 
@@ -177,6 +181,37 @@ Two consequences for the F11 work:
   acknowledge a reboot the host caused itself;
 - an unclean reset while the package is hot is a further reason to insist on
   a real quiet window before compiling, and not on three isolated samples.
+
+## Stage A rebuilt with the lighter path
+
+With the F11 stack stopped so the preflight could admit the host, Stage A ran
+with the new mode:
+
+```bash
+F11_BUILD_CPUS=0.5 infra/f11/build-artifacts.sh --reuse-node-modules
+```
+
+It compiled in **50 s** with the preflight allowing it and the supervisor
+cutting at 88 C. The peak was 88 C, reached but not sustained, so there was
+no breach. The host started at 86 C and ended at 88 C: the build's own
+contribution was about **+2 C**, against the +8 C measured for the original
+method at two cores with `npm ci`. That is a measurement, not an assumption,
+and it is the reason the lighter path is worth keeping.
+
+The Caddy image was then rebuilt with a COPY only, in 1 s, and only the F11
+frontend container was recreated.
+
+One defect surfaced only at runtime: Caddy served the site as
+`http://127.0.0.1:4200`, so a request arriving through the SSH tunnel with
+`Host: localhost:4200` matched no site and came back as an empty body. The
+Keycloak client registers both names, so the Caddyfile now serves both
+`http://127.0.0.1:4200` and `http://localhost:4200`.
+
+Two operational notes for the manual session: a TOTP code can only be used
+once per 30 s window, so a second login with the same code is refused by
+Keycloak; and the Angular compiler escapes non-ASCII characters as `\xNN`,
+so a literal search for "Panel clínico" in the bundle finds nothing even
+though the text is Spanish.
 
 ## Acceptance criteria
 

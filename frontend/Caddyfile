@@ -2,7 +2,11 @@
 	admin off
 }
 
-http://127.0.0.1:4200 {
+# Both names are served on purpose. The Keycloak client registers
+# http://127.0.0.1:4200/* and http://localhost:4200/*, and the browser reaches
+# the stack through the SSH tunnel with whatever Host it was opened with. A
+# single address would answer with an empty body for the other one.
+http://127.0.0.1:4200, http://localhost:4200 {
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
