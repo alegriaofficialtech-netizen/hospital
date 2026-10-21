@@ -34,6 +34,9 @@
 #                       (default com.sgsi-zta.component=f11-build)
 #   --builder NAME      F11 BuildKit builder to force-stop on abort
 #   --builder-prefix P  safety allowlist for --builder (default sgsi-zta-f11)
+#   --abort-command C   shell command executed on any abort, before the
+#                       supervised command is signalled. Use it to stop a
+#                       component that is not a labelled container.
 #   --report-only       never abort, only measure
 #
 # Exit codes: the command's own status, 90 if a threshold aborted the run,
@@ -45,6 +48,7 @@ PSI_FAIL=75
 MEM_FAIL=1024
 INTERVAL=5
 LABEL="com.sgsi-zta.component=f11-build"
+ABORT_COMMAND=""
 BUILDER=""
 BUILDER_PREFIX="sgsi-zta-f11"
 REPORT_ONLY=0
@@ -58,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --mem-fail)  [[ $# -ge 2 ]] || { echo "--mem-fail needs a value" >&2; exit 2; };  MEM_FAIL="$2";  shift 2 ;;
     --interval)  [[ $# -ge 2 ]] || { echo "--interval needs a value" >&2; exit 2; };  INTERVAL="$2";  shift 2 ;;
     --label)     [[ $# -ge 2 ]] || { echo "--label needs a value" >&2; exit 2; };     LABEL="$2";     shift 2 ;;
+    --abort-command) [[ $# -ge 2 ]] || { echo "--abort-command needs a value" >&2; exit 2; }; ABORT_COMMAND="$2"; shift 2 ;;
     --builder)   [[ $# -ge 2 ]] || { echo "--builder needs a value" >&2; exit 2; };   BUILDER="$2";   shift 2 ;;
     --builder-prefix) [[ $# -ge 2 ]] || { echo "--builder-prefix needs a value" >&2; exit 2; }; BUILDER_PREFIX="$2"; shift 2 ;;
     --report-only) REPORT_ONLY=1; shift ;;
@@ -147,6 +152,12 @@ stop_builder() {
   fi
 }
 
+run_abort_command() {
+  [[ -z "$ABORT_COMMAND" ]] && return 0
+  echo "abort command: $ABORT_COMMAND" >> "$LOG"
+  bash -c "$ABORT_COMMAND" >> "$LOG" 2>&1 || true
+}
+
 stop_stack() {
   local ids
   ids="$(docker ps -q --filter "label=$LABEL" 2>/dev/null)"
@@ -155,6 +166,7 @@ stop_stack() {
     docker kill $ids >> "$LOG" 2>&1 || true
   fi
   stop_builder
+  run_abort_command
   [[ -n "$CHILD" ]] && kill -TERM "$CHILD" 2>/dev/null
 }
 

@@ -32,8 +32,13 @@
 #
 # Usage
 # -----
-#   preflight-gate.sh [--stage build|up|api|e2e] [--report] [--json] [--allow-reboot]
+#   preflight-gate.sh [--stage build|up|api|e2e] [--component C] [--report] [--json] [--allow-reboot]
 #
+#   --component C   which component is about to start (stage "up" only):
+#                   all|keycloak|backend|frontend. "backend" admits a running
+#                   Keycloak, "frontend" admits a running Keycloak. The
+#                   component's own port must be free and its dependencies
+#                   must already be listening. Default: all.
 #   --report        print the full evidence table, always exit 0
 #   --json          machine readable output
 #   --allow-reboot  accept a boot_id change (still refuses if a run was active)
@@ -58,6 +63,7 @@ PORTS=(8085 8010 4200)
 PROJECT_LABEL="com.sgsi-zta.project=f11"
 
 STAGE="up"
+COMPONENT="all"
 MODE="enforce"
 JSON=0
 ALLOW_REBOOT=0
@@ -74,6 +80,9 @@ while [[ $# -gt 0 ]]; do
     --stage)
       [[ $# -ge 2 ]] || { echo "--stage requires a value" >&2; exit 2; }
       STAGE="$2"; shift 2 ;;
+    --component)
+      [[ $# -ge 2 ]] || { echo "--component requires a value" >&2; exit 2; }
+      COMPONENT="$2"; shift 2 ;;
     --report)       MODE="report"; shift ;;
     --json)         JSON=1; shift ;;
     --allow-reboot) ALLOW_REBOOT=1; shift ;;
@@ -85,6 +94,11 @@ done
 case "$STAGE" in
   build|up|api|e2e) ;;
   *) echo "invalid stage '$STAGE' (expected build|up|api|e2e)" >&2; exit 2 ;;
+esac
+
+case "$COMPONENT" in
+  all|keycloak|backend|frontend) ;;
+  *) echo "invalid component '$COMPONENT' (expected all|keycloak|backend|frontend)" >&2; exit 2 ;;
 esac
 
 CORES="$(nproc 2>/dev/null || echo 4)"
@@ -387,22 +401,43 @@ fi
 # 9. ports
 # ---------------------------------------------------------------------------
 if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
-  busy=0
-  for p in "${PORTS[@]}"; do if port_busy "$p"; then busy=$((busy + 1)); fi; done
-  if (( busy == 0 )); then
-    record ports FAIL "all free" "stack should be running but nothing listens on ${PORTS[*]}"
-  elif (( busy < ${#PORTS[@]} )); then
-    record ports WARN "${busy}/${#PORTS[@]} up" "not every expected port is listening"
+  # The api stage exercises the backend only: the frontend is not required.
+  if [[ "$STAGE" == "api" ]]; then
+    NEED_PORTS=(8085 8010)
   else
-    record ports PASS "${busy}/${#PORTS[@]} up" "expected ports are listening"
+    NEED_PORTS=(8085 8010 4200)
+  fi
+  missing=""
+  for p in "${NEED_PORTS[@]}"; do
+    if ! port_busy "$p"; then missing="${missing} ${p}"; fi
+  done
+  if [[ -n "$missing" ]]; then
+    record ports FAIL "not listening:${missing}" "stack should be running but nothing listens on${missing}"
+  else
+    record ports PASS "listening" "${NEED_PORTS[*]} are listening"
   fi
 else
+  # Component-aware expectations. The component's own port must be free and
+  # the ports it depends on must already be listening.
+  case "$COMPONENT" in
+    backend)  FREE_PORTS=(8010 4200); LISTEN_PORTS=(8085) ;;
+    frontend) FREE_PORTS=(4200);     LISTEN_PORTS=(8085) ;;
+    *)        FREE_PORTS=(8085 8010 4200); LISTEN_PORTS=() ;;
+  esac
   conflict=""
-  for p in "${PORTS[@]}"; do if port_busy "$p"; then conflict="${conflict} ${p}"; fi; done
+  for p in "${FREE_PORTS[@]}"; do
+    if port_busy "$p"; then conflict="${conflict} ${p}"; fi
+  done
+  absent=""
+  for p in "${LISTEN_PORTS[@]}"; do
+    if ! port_busy "$p"; then absent="${absent} ${p}"; fi
+  done
   if [[ -n "$conflict" ]]; then
     record ports FAIL "busy:${conflict}" "ports must be free before start"
+  elif [[ -n "$absent" ]]; then
+    record ports FAIL "not listening:${absent}" "dependencies must already be running"
   else
-    record ports PASS "free" "${PORTS[*]} available"
+    record ports PASS "ready" "free:${FREE_PORTS[*]} listening:${LISTEN_PORTS[*]:-none}"
   fi
 fi
 
@@ -419,12 +454,16 @@ if (( BACKEND_ACTIVE == 0 )) && port_busy 8010; then BACKEND_ACTIVE=1; fi
 if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
   missing=""
   if ! grep -q 'sgsi-zta-f11-keycloak' <<<"$RUNNING_NAMES"; then missing="${missing} keycloak"; fi
-  if ! grep -q 'sgsi-zta-f11-frontend' <<<"$RUNNING_NAMES"; then missing="${missing} frontend"; fi
+  if [[ "$STAGE" == "e2e" ]] && ! grep -q 'sgsi-zta-f11-frontend' <<<"$RUNNING_NAMES"; then missing="${missing} frontend"; fi
   if (( BACKEND_ACTIVE == 0 )); then missing="${missing} backend"; fi
   if [[ -n "$missing" ]]; then
     record stack FAIL "not up" "missing:${missing}"
   else
-    record stack PASS "up" "keycloak + frontend + backend active"
+    if [[ "$STAGE" == "e2e" ]]; then
+      record stack PASS "up" "keycloak + frontend + backend active"
+    else
+      record stack PASS "up" "keycloak + backend active (frontend not required)"
+    fi
   fi
   # a container that restarted on its own is a failed run, not a fresh one
   restarted=""
@@ -440,10 +479,28 @@ if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
     record restarts PASS "none" "no container restarts"
   fi
 else
-  if [[ -n "$ALL_NAMES" ]] || (( BACKEND_ACTIVE == 1 )); then
-    record stack FAIL "present" "F11 stack or backend already active"
+  # Component-aware: only the dependencies of the component about to start may
+  # be running, and the component itself must not be running yet.
+  want_keycloak=0
+  case "$COMPONENT" in
+    backend|frontend) want_keycloak=1 ;;
+  esac
+  unexpected=""
+  for n in $ALL_NAMES; do
+    if [[ "$n" != "sgsi-zta-f11-keycloak" ]] || (( want_keycloak == 0 )); then
+      unexpected="${unexpected} ${n}"
+    fi
+  done
+  if (( want_keycloak == 1 )) && ! grep -q 'sgsi-zta-f11-keycloak' <<<"$RUNNING_NAMES"; then
+    unexpected="${unexpected} keycloak(missing)"
+  fi
+  if (( BACKEND_ACTIVE == 1 )); then
+    unexpected="${unexpected} backend(active)"
+  fi
+  if [[ -n "$unexpected" ]]; then
+    record stack FAIL "present" "unexpected state for component '$COMPONENT':${unexpected}"
   else
-    record stack PASS "down" "no F11 containers, backend inactive"
+    record stack PASS "ready" "component '$COMPONENT' can start"
   fi
 fi
 

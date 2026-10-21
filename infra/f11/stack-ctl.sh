@@ -56,8 +56,9 @@ die() {
 }
 
 require_gate() {
-  echo "== preflight (stage up) =="
-  if ! "$GATE" --stage up; then
+  local component="$1"
+  echo "== preflight (stage up, component $component) =="
+  if ! "$GATE" --stage up --component "$component"; then
     die "preflight refused the host; nothing was started"
   fi
 }
@@ -212,10 +213,10 @@ esac
 case "$ACTION" in
   start)
     case "$COMPONENT" in
-      keycloak) require_gate; start_keycloak ;;
-      frontend) require_gate; start_frontend ;;
-      backend)  require_gate; start_backend ;;
-      all)      require_gate; start_keycloak; start_backend; start_frontend ;;
+      keycloak) require_gate keycloak; start_keycloak ;;
+      frontend) require_gate frontend; start_frontend ;;
+      backend)  require_gate backend; start_backend ;;
+      all)      require_gate all; start_keycloak; start_backend; start_frontend ;;
       *) die "unknown component '$COMPONENT'" ;;
     esac
     ;;
