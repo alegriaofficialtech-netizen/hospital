@@ -421,7 +421,7 @@ else
   # the ports it depends on must already be listening.
   case "$COMPONENT" in
     backend)  FREE_PORTS=(8010 4200); LISTEN_PORTS=(8085) ;;
-    frontend) FREE_PORTS=(4200);     LISTEN_PORTS=(8085) ;;
+    frontend) FREE_PORTS=(4200);     LISTEN_PORTS=(8085 8010) ;;
     *)        FREE_PORTS=(8085 8010 4200); LISTEN_PORTS=() ;;
   esac
   conflict=""
@@ -482,11 +482,15 @@ else
   # Component-aware: only the dependencies of the component about to start may
   # be running, and the component itself must not be running yet.
   want_keycloak=0
+  want_backend=0
   case "$COMPONENT" in
-    backend|frontend) want_keycloak=1 ;;
+    backend)  want_keycloak=1 ;;
+    frontend) want_keycloak=1; want_backend=1 ;;
   esac
   unexpected=""
-  for n in $ALL_NAMES; do
+  # Only running containers matter: an exited container of the component
+  # about to start is recreated by compose, not a conflicting state.
+  for n in $RUNNING_NAMES; do
     if [[ "$n" != "sgsi-zta-f11-keycloak" ]] || (( want_keycloak == 0 )); then
       unexpected="${unexpected} ${n}"
     fi
@@ -494,7 +498,9 @@ else
   if (( want_keycloak == 1 )) && ! grep -q 'sgsi-zta-f11-keycloak' <<<"$RUNNING_NAMES"; then
     unexpected="${unexpected} keycloak(missing)"
   fi
-  if (( BACKEND_ACTIVE == 1 )); then
+  if (( want_backend == 1 )); then
+    if (( BACKEND_ACTIVE == 0 )); then unexpected="${unexpected} backend(missing)"; fi
+  elif (( BACKEND_ACTIVE == 1 )); then
     unexpected="${unexpected} backend(active)"
   fi
   if [[ -n "$unexpected" ]]; then

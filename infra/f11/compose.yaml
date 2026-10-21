@@ -58,6 +58,16 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # The official caddy binary carries the file capability
+    # cap_net_bind_service=ep so it can bind privileged ports as a non-root
+    # user. With an empty capability bounding set the kernel refuses the
+    # exec with EPERM ("exec /usr/bin/caddy: operation not permitted") and
+    # the container dies before serving anything. Caddy only binds 4200,
+    # which never needed the capability, so granting it back is the price of
+    # keeping the shipped image untouched. Stripping the file capability at
+    # build time would remove the need for this entirely.
+    cap_add:
+      - NET_BIND_SERVICE
     deploy:
       resources:
         limits:
