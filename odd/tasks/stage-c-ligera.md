@@ -129,6 +129,31 @@ component-aware so a running Keycloak does not block the backend, and the
 `api` stage had to stop requiring the frontend, which the API suite never
 uses (commit 857e7a7).
 
+## The Windows tunnel depends on the server sshd policy
+
+The server does not allow TCP forwarding in general. `/etc/ssh/sshd_config`
+sets `AllowTcpForwarding no`, and `/etc/ssh/sshd_config.d/90-evaluacion-tunnel.conf`
+opens it only for `Match User elcra Address 192.168.1.7` with
+`AllowTcpForwarding local` and a fixed `PermitOpen` list.
+
+Measured from the Windows machine (192.168.1.7 on Wi-Fi):
+
+| Origin | Destination | Result |
+|---|---|---|
+| LAN 192.168.1.36 | 127.0.0.1:8085 | HTTP 200 |
+| LAN 192.168.1.36 | 127.0.0.1:4200 | refused, "administratively prohibited" |
+| Tailscale 100.78.61.51 | any | refused, "administratively prohibited" |
+
+Two consequences: the tunnel must be opened against the LAN address, not the
+Tailscale alias, and 127.0.0.1:4200 had to be added to the permitted
+destinations for the browser to reach the frontend. The prepared rule adds
+that single destination, keeps every other destination and restriction, and
+is installed with `sshd -t` plus `sshd -T -C` validation before an `sshd`
+reload that never restarts the service and never closes open sessions.
+
+The browser only needs 4200 and 8085. The API is reached through the Caddy
+proxy on 4200, so the backend port 8010 does not have to be forwarded.
+
 ## Acceptance criteria
 
 - [ ] `--stage up` admits the host and `--stage api` refuses while the stack
