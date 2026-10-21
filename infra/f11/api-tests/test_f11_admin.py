@@ -60,9 +60,25 @@ class IdentityAdminSuite(unittest.TestCase):
             self.credentials["clientId"],
             self.credentials["redirectUri"],
         )
-        result = flow.login(
-            username, password or user["password"], secret,
-        )
+        # Un codigo TOTP solo sirve una vez por ventana de 30 s. Si otro
+        # login del mismo usuario acaba de consumirlo, se espera a la ventana
+        # siguiente y se reintenta una vez.
+        for attempt in range(2):
+            try:
+                result = flow.login(
+                    username, password or user["password"], secret,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 1 or "no respondio" not in str(exc) and "authorization code" not in str(exc):
+                    raise
+                time.sleep(32)
+                flow = self.setup_realm.BrowserFlow(
+                    KC_URL,
+                    self.credentials["realm"],
+                    self.credentials["clientId"],
+                    self.credentials["redirectUri"],
+                )
         self._tokens[key] = result["access_token"]
         return result["access_token"]
 
