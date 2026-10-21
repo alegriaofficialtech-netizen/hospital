@@ -371,6 +371,21 @@ warns at 82 °C and refuses at 90 °C. Expect the temperature warning during any
 build; it is not a failure by itself, but a sustained rise above 90 °C must stop
 the run.
 
+Measured during the first Stage B2 attempt (Playwright image, buildkitd limited
+to `memory=3g` and `cpu-quota=200000`): `x86_pkg_temp` went from 73 C to 93 C in
+about 110 s, with 8 samples at or above 88 C and swings of 10 C between
+consecutive 5 s samples as the fan cycled. The supervised abort fired at 88 C
+sustained, removed the builder, and the image was never produced.
+
+Two consequences. First, a two-core buildkitd is too hot for this package: the
+thermal ceiling, not CPU or memory, is the binding constraint for B2. Second,
+killing the builder destroys its cache, so an aborted attempt loses every
+completed layer and the next one starts from scratch.
+
+If B2 is retried, reduce the builder to one core
+(`F11_E2E_BUILDER_CPU_QUOTA=100000`) and supervise with the same wrapper. It
+will take roughly twice as long but should stay under the ceiling.
+
 ### Safe procedure (Angular + Python + Keycloak)
 
 ```bash
