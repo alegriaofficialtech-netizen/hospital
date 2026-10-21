@@ -154,6 +154,30 @@ reload that never restarts the service and never closes open sessions.
 The browser only needs 4200 and 8085. The API is reached through the Caddy
 proxy on 4200, so the backend port 8010 does not have to be forwarded.
 
+## The host rebooted under load
+
+During the thermal work the host rebooted on its own: the boot id changed,
+the uptime dropped to 514 s and there were 13 minutes of downtime between the
+end of the previous boot (15:25:55) and the start of the new one (15:38:58).
+It took the whole F11 stack down with it, because the compose file uses
+`restart: "no"` while the other stacks on this machine carry an always
+policy and came back on their own.
+
+Measured facts about the reboots: the last five boots ended with **no**
+orderly shutdown events at all, and boots -2 and -1 contain no panic,
+watchdog, thermal, MCE, hardware error or oom-kill entry. The shutdowns left
+no kernel trace, so the cause cannot be established from the logs. What can be
+said is that the host was running between 74 and 92 C of package temperature
+with no throttling and no orderly shutdown, and that it hard-reset.
+
+Two consequences for the F11 work:
+
+- the preflight gate correctly refused the restart until the host had been up
+  for its 600 s stability window, and `F11_ALLOW_REBOOT=1` is needed to
+  acknowledge a reboot the host caused itself;
+- an unclean reset while the package is hot is a further reason to insist on
+  a real quiet window before compiling, and not on three isolated samples.
+
 ## Acceptance criteria
 
 - [ ] `--stage up` admits the host and `--stage api` refuses while the stack
