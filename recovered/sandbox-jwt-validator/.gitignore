@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+/backup_*
+.env*
+tls/
+-e 
+# SQLite databases and persistent volumes
+*.db
+*.db-*
+data/

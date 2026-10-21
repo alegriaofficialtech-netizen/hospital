@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily SGSI-ZTA TLS certificate renewal check
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=1800
+Persistent=true
+Unit=sgsi-zta-cert-renew.service
+
+[Install]
+WantedBy=timers.target

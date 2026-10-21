@@ -1,0 +1,17 @@
+[Unit]
+Description=SGSI-ZTA: renew Tailscale TLS certificate for the identity gateway
+Documentation=file:/home/elcra/sandbox-jwt-validator/OPENCODE_CANONICAL_ISSUER.md
+After=network-online.target tailscaled.service docker.service
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/sgsi-zta-renew-cert --if-expiring-days 30
+TimeoutStartSec=300
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

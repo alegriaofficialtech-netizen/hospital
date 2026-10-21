@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+backup_*
+.env*
+.env.*
+tls/
+node_modules/
+dist/
+.angular/
+coverage/
+*.tsbuildinfo
+.venv/
+backend/.venv/
+frontend/.venv/
+recovered/**/*.tar.gz
