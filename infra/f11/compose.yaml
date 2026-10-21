@@ -1,0 +1,79 @@
+name: sgsi-zta-f11
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "2"
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    container_name: sgsi-zta-f11-keycloak
+    command: ["start-dev"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?set in infra/f11/.env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set in infra/f11/.env}
+      KC_HOSTNAME: http://127.0.0.1:8085
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:8085:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    networks:
+      - f11-net
+    restart: "no"
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+          pids: 512
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    logging: *default-logging
+    labels:
+      com.sgsi-zta.project: f11
+      com.sgsi-zta.component: keycloak
+
+  frontend:
+    image: sgsi-zta-f11-frontend:local
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: sgsi-zta-f11-frontend
+    network_mode: host
+    restart: "no"
+    stop_grace_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+          pids: 64
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    logging: *default-logging
+    labels:
+      com.sgsi-zta.project: f11
+      com.sgsi-zta.component: frontend
+
+volumes:
+  keycloak-data:
+    name: sgsi-zta-f11-keycloak-data
+
+networks:
+  f11-net:
+    name: sgsi-zta-f11-net
+    driver: bridge

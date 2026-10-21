@@ -19,3 +19,9 @@ infra/local-test/.test-credentials.local.json
 infra/local-test/runtime/
 frontend/test-results/
 frontend/playwright-report/
+
+# F11 isolated runtime secrets (never commit)
+infra/f11/.env
+infra/f11/backend.env
+!infra/f11/.env.example
+!infra/f11/backend.env.example

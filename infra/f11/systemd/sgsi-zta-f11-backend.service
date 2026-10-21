@@ -1,0 +1,37 @@
+[Unit]
+Description=SGSI-ZTA F11 backend (host venv, loopback 8010)
+Documentation=file:///home/elcra/sgsi-zta-integration/infra/f11/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=elcra
+Group=users
+WorkingDirectory=/home/elcra/sgsi-zta-integration/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/home/elcra/sgsi-zta-integration/infra/f11/backend.env
+ExecStart=/home/elcra/sgsi-zta-integration/backend/.venv/bin/python /home/elcra/sgsi-zta-integration/backend/server.py
+Restart=no
+KillMode=mixed
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/elcra/sgsi-zta-runtime/f11
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=512M
+CPUQuota=50%
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

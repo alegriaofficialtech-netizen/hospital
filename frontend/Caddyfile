@@ -1,0 +1,23 @@
+{
+	admin off
+}
+
+http://127.0.0.1:4200 {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	encode gzip zstd
+
+	route {
+		@api path /api/*
+		reverse_proxy @api 127.0.0.1:8010
+
+		root * /usr/share/caddy
+		try_files {path} /index.html
+		file_server
+	}
+}
