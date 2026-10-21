@@ -8,9 +8,11 @@ const STORAGE_KEY = 'sgsi-zta.session';
 const ROLE_ALIASES: Record<string, UserRole> = {
   reception: 'ROLE_RECEPTION',
   recepcion: 'ROLE_RECEPTION',
+  admision: 'ROLE_RECEPTION',
   lab: 'ROLE_LAB_TECH',
   lab_tech: 'ROLE_LAB_TECH',
   laboratory: 'ROLE_LAB_TECH',
+  laboratorio: 'ROLE_LAB_TECH',
   pathologist: 'ROLE_PATHOLOGIST',
   medico: 'ROLE_PATHOLOGIST',
   auditor: 'ROLE_SECURITY_AUDITOR',
@@ -49,12 +51,15 @@ export class AuthService {
   );
   private keycloak?: Keycloak;
   private initPromise?: Promise<void>;
+  private refreshTimer?: ReturnType<typeof setInterval>;
 
   readonly session = this._session.asReadonly();
   readonly user = computed(() => this._session());
   readonly isAuthenticated = computed(() => this._session() !== null);
   readonly roles = computed<readonly UserRole[]>(() => this._session()?.roles ?? []);
   readonly mfaVerified = computed(() => this._session()?.mfaVerified === true);
+  readonly authMode = computed(() => this._session()?.authMode ?? null);
+  readonly isDemoAuth = computed(() => this._session()?.authMode === 'demo');
 
   get accessToken(): string | undefined {
     return this.keycloak?.token;
@@ -71,6 +76,9 @@ export class AuthService {
   }
 
   loginDemo(role: UserRole, username: string): void {
+    if (!environment.useMockAuth) {
+      throw new Error('Demo authentication is disabled while Keycloak mode is active.');
+    }
     const cleanUsername = username.trim() || this.defaultUsername(role);
     const session: SessionUser = {
       username: cleanUsername,
@@ -101,18 +109,18 @@ export class AuthService {
 
   markMfaVerified(): void {
     const current = this._session();
-    if (!current) {
+    if (!current || current.authMode !== 'demo') {
+      // Real MFA evidence comes only from the Keycloak token (AMR/ACR).
       return;
     }
     const updated: SessionUser = { ...current, mfaVerified: true };
     this._session.set(updated);
-    if (updated.authMode === 'demo') {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    }
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   }
 
   async logout(): Promise<void> {
     const activeKeycloak = this.keycloak;
+    this.stopTokenRefresh();
     this._session.set(null);
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem(STORAGE_KEY);
@@ -185,6 +193,38 @@ export class AuthService {
       authMode: 'keycloak',
     };
     this._session.set(session);
+    this.startTokenRefresh();
+  }
+
+  private startTokenRefresh(): void {
+    this.stopTokenRefresh();
+    if (!this.keycloak || environment.useMockAuth) {
+      return;
+    }
+    this.refreshTimer = setInterval(() => {
+      const keycloak = this.keycloak;
+      if (!keycloak?.authenticated) {
+        return;
+      }
+      keycloak
+        .updateToken(60)
+        .then((refreshed) => {
+          if (refreshed) {
+            this.applyKeycloakSession(keycloak);
+          }
+        })
+        .catch(() => {
+          this.stopTokenRefresh();
+          this._session.set(null);
+        });
+    }, 30_000);
+  }
+
+  private stopTokenRefresh(): void {
+    if (this.refreshTimer !== undefined) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
   }
 
   private storeSession(session: SessionUser): void {

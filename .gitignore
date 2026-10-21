@@ -14,3 +14,8 @@ backend/.venv/
 frontend/.venv/
 backend/data/
 recovered/**/*.tar.gz
+infra/local-test/.env
+infra/local-test/.test-credentials.local.json
+infra/local-test/runtime/
+frontend/test-results/
+frontend/playwright-report/

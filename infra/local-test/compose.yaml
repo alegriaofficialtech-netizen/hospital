@@ -1,0 +1,20 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.7
+    container_name: sgsi-zta-f11-keycloak
+    command: ["start-dev"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in infra/local-test/.env}
+      KC_HOSTNAME: http://127.0.0.1:8085
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:8085:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    restart: unless-stopped
+
+volumes:
+  keycloak-data:

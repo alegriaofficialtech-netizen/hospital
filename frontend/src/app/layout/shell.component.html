@@ -30,7 +30,7 @@
 
     <div class="sidenav-footer">
       <span class="role-label">{{ roleLabel() }}</span>
-      <span class="mode-label">Synthetic demo data</span>
+      <span class="mode-label">{{ demoAuth() ? 'Synthetic demo data' : 'Local real Keycloak' }}</span>
     </div>
   </mat-sidenav>
 

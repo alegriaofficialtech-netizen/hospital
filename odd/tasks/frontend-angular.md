@@ -72,6 +72,14 @@ Roles: `admision`/`ROLE_RECEPTION`, `laboratorio`/`ROLE_LAB_TECH`, `medico`/`ROL
 - [x] **F9 — Auditoría.** Eventos, filtros, chip de cadena válida/inválida, detalle.
 - [x] **F10 — Indicadores.** Órdenes por estado, volumen diario, tasa de validación, eventos de auditoría.
 - [ ] **F11 — Integración real.** `ApiService` y proxy implementados; falta probar contra backend/Keycloak reales cuando estén disponibles. El modo mock sigue siendo el fallback.
+  - [ ] **F11.1 — Entorno local aislado.** Keycloak de pruebas en WSL2/Docker, realm `hospital-lab-local`, puerto `8085`, sin reutilizar contenedores ni secretos de producción.
+  - [ ] **F11.2 — Realm sintético y MFA real.** Roles, cliente público PKCE S256, mapper de audiencia, `oidc-amr-mapper`, flujo condicional TOTP para `mfa-required`, usuarios sintéticos.
+  - [ ] **F11.3 — Backend real.** Arranque con discovery local, audiencia `clinical-poc-api`, `azp=clinical-poc`, SQLite aislada y claves sintéticas de IoMT.
+  - [ ] **F11.4 — Modo real separado.** Configuración Angular `local-real` con `useMockApi=false` y `useMockAuth=false`; el modo mock sigue siendo el default.
+  - [ ] **F11.5 — UI real.** Ocultar bypass demo en modo Keycloak; MFA derivada del token; no permitir “simular MFA” con OIDC real.
+  - [ ] **F11.6 — E2E de backend.** Pruebas directas de tokens reales: admisión, laboratorio, médico con TOTP, auditoría y denegaciones RBAC/MFA.
+  - [ ] **F11.7 — E2E de navegador.** Playwright con Authorization Code + PKCE, TOTP, admisión, liberación y auditoría.
+  - [ ] **F11.8 — Evidencia y límites.** Documentar comandos, resultados observados, fallos de entorno y pendientes; commits locales.
 - [x] **F12 — Tests, build y commits.** Unit tests de servicios/mocks/guards y componentes clave; `npm run build`; commits por unidad.
 
 ## 8. Progreso y evidencia (2026-10-21)

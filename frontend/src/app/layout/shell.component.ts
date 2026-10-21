@@ -81,6 +81,7 @@ export class ShellComponent {
   private readonly breakpoint = inject(BreakpointObserver);
 
   readonly user = this.auth.user;
+  readonly demoAuth = this.auth.isDemoAuth;
   readonly navItems = computed(() => NAV_ITEMS.filter((item) => this.auth.hasAnyRole(item.roles)));
   readonly roleLabel = computed(() => {
     const first = this.auth.roles()[0];

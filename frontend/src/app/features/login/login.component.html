@@ -11,42 +11,11 @@
     </mat-card-header>
 
     <mat-card-content>
-      <p class="demo-notice">
-        Demo mode uses synthetic data only. Validation requires a simulated MFA step.
-      </p>
-
-      <mat-form-field appearance="outline" class="full-width">
-        <mat-label>Username</mat-label>
-        <input
-          matInput
-          name="username"
-          autocomplete="username"
-          [(ngModel)]="username"
-          placeholder="demo.reception"
-        />
-        <mat-icon matSuffix>person</mat-icon>
-      </mat-form-field>
-
-      <p class="section-label">Demo roles</p>
-      <div class="role-grid">
-        @for (item of demoRoles; track item.role) {
-          <button
-            mat-stroked-button
-            type="button"
-            class="role-button"
-            (click)="loginDemo(item.role)"
-          >
-            <mat-icon>{{ item.icon }}</mat-icon>
-            <span class="role-copy">
-              <strong>{{ item.label }}</strong>
-              <small>{{ item.description }}</small>
-            </span>
-          </button>
-        }
-      </div>
-
       @if (keycloakEnabled) {
-        <div class="divider"><span>or</span></div>
+        <p class="demo-notice">
+          Real mode uses the isolated local Keycloak realm with synthetic users. The
+          pathologist must complete a TOTP challenge before validation.
+        </p>
 
         <button
           mat-flat-button
@@ -59,7 +28,46 @@
           <mat-icon>login</mat-icon>
           Sign in with Keycloak
         </button>
+
+        <p class="mock-hint">
+          OIDC Authorization Code + PKCE S256. Demo role shortcuts are intentionally
+          unavailable in this mode.
+        </p>
       } @else {
+        <p class="demo-notice">
+          Demo mode uses synthetic data only. Validation requires a simulated MFA step.
+        </p>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Username</mat-label>
+          <input
+            matInput
+            name="username"
+            autocomplete="username"
+            [(ngModel)]="username"
+            placeholder="demo.reception"
+          />
+          <mat-icon matSuffix>person</mat-icon>
+        </mat-form-field>
+
+        <p class="section-label">Demo roles</p>
+        <div class="role-grid">
+          @for (item of demoRoles; track item.role) {
+            <button
+              mat-stroked-button
+              type="button"
+              class="role-button"
+              (click)="loginDemo(item.role)"
+            >
+              <mat-icon>{{ item.icon }}</mat-icon>
+              <span class="role-copy">
+                <strong>{{ item.label }}</strong>
+                <small>{{ item.description }}</small>
+              </span>
+            </button>
+          }
+        </div>
+
         <p class="mock-hint">
           Keycloak is disabled while demo authentication is enabled. Set
           <code>useMockAuth: false</code> to use the real issuer.

@@ -3,7 +3,8 @@
     <div>
       <h1 class="page-title">Medical validation</h1>
       <p class="page-subtitle">
-        Review analyzed orders and release reports with a simulated MFA step.
+        Review analyzed orders and release reports with
+        {{ demoAuth() ? 'a simulated MFA step' : 'Keycloak TOTP MFA' }}.
       </p>
     </div>
     <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
@@ -116,21 +117,27 @@
               <strong>Multi-factor authentication</strong>
               <p>
                 @if (mfaVerified()) {
-                  Synthetic MFA verified for this session.
-                } @else {
+                  {{ demoAuth() ? 'Synthetic MFA verified for this session.' : 'Keycloak TOTP verified for this session.' }}
+                } @else if (demoAuth()) {
                   Validation is blocked until MFA is simulated.
+                } @else {
+                  The Keycloak token has no OTP evidence. The backend will deny validation.
                 }
               </p>
             </div>
           </div>
           @if (mfaVerified()) {
             <mat-chip-set>
-              <mat-chip highlighted>MFA verified</mat-chip>
+              <mat-chip highlighted>{{ demoAuth() ? 'MFA verified' : 'TOTP verified' }}</mat-chip>
             </mat-chip-set>
-          } @else {
+          } @else if (demoAuth()) {
             <button mat-stroked-button type="button" (click)="simulateMfa()">
               Simulate MFA verification
             </button>
+          } @else {
+            <mat-chip-set>
+              <mat-chip highlighted>TOTP required</mat-chip>
+            </mat-chip-set>
           }
         </div>
 

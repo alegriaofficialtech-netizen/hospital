@@ -26,7 +26,10 @@ import { OrderStatusBadgeComponent } from '../../shared/order-status-badge.compo
 
 const MEASUREMENT_LABELS: Record<string, string> = {
   hemoglobina_g_dl: 'Hemoglobin (g/dL)',
+  hematocrito_pct: 'Hematocrit (%)',
+  leucocitos_mm3: 'Leukocytes (/mm³)',
   leucocitos_mil_ul: 'Leukocytes (10³/µL)',
+  plaquetas_k_ul: 'Platelets (10³/µL)',
   plaquetas_mil_ul: 'Platelets (10³/µL)',
   glucosa_mg_dl: 'Glucose (mg/dL)',
   creatinina_mg_dl: 'Creatinine (mg/dL)',
@@ -74,6 +77,7 @@ export class DoctorComponent {
   readonly error = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
   readonly mfaVerified = this.auth.mfaVerified;
+  readonly demoAuth = this.auth.isDemoAuth;
 
   readonly selected = computed(
     () => this.orders().find((order) => order.order_id === this.selectedId()) ?? null,
@@ -122,6 +126,9 @@ export class DoctorComponent {
   }
 
   simulateMfa(): void {
+    if (!this.demoAuth()) {
+      return;
+    }
     this.auth.markMfaVerified();
     this.snackBar.open('Synthetic MFA verification recorded for this session.', 'Dismiss', {
       duration: 3500,
