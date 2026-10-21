@@ -144,6 +144,9 @@ class F11ApiSuite(unittest.TestCase):
         cls.device_id = next(iter(devices))
         cls.device_key = devices[cls.device_id]
         cls._tokens = {}
+        # unittest builds a fresh instance for every test method, so state
+        # shared by several tests has to live on the class, not the instance.
+        cls.order_id = "F11-API-%d" % (int(time.time()) * 1000 + os.getpid() % 1000)
 
     def token(self, username):
         """Mint an access token through the real OIDC flow."""
@@ -221,7 +224,6 @@ class F11ApiSuite(unittest.TestCase):
     # -- RBAC ------------------------------------------------------------
 
     def test_04_reception_creates_an_order(self):
-        self.order_id = "F11-API-%d" % (int(time.time()) * 1000 + os.getpid() % 1000)
         status, payload = self.api(
             "POST",
             "/api/v1/orders",
