@@ -130,11 +130,20 @@ stop_builder() {
     *) echo "refusing to stop builder '$BUILDER' (outside $BUILDER_PREFIX*)" >> "$LOG"; return 0 ;;
   esac
   local ctr="buildx_buildkit_${BUILDER}0"
+  local vol="buildx_buildkit_${BUILDER}0_state"
+
+  # 1. kill the daemon first: this aborts the running build immediately
   if docker inspect "$ctr" >/dev/null 2>&1; then
     docker rm -f "$ctr" >> "$LOG" 2>&1 && echo "stopped builder container $ctr" >> "$LOG"
   fi
+  # 2. drop the buildx node
   if docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
-    docker buildx rm "$BUILDER" >> "$LOG" 2>&1 && echo "removed buildx node $BUILDER" >> "$LOG"
+    docker buildx rm --force "$BUILDER" >> "$LOG" 2>&1 && echo "removed buildx node $BUILDER" >> "$LOG"
+  fi
+  # 3. buildx leaves its state volume behind when the daemon died first.
+  #    Without this the abort leaks the whole build cache (1.8 GB measured).
+  if docker volume inspect "$vol" >/dev/null 2>&1; then
+    docker volume rm "$vol" >> "$LOG" 2>&1 && echo "removed builder state volume $vol" >> "$LOG"
   fi
 }
 
