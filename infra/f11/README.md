@@ -615,3 +615,35 @@ infra/f11/stack-ctl.sh stop all
   session over the SSH tunnel is the current UI evidence.
 - The remote E2E paths and ports must be adapted to F11 before the full suite is
   considered valid.
+
+## The access page theme (Keycloak)
+
+The credential form lives in Keycloak, never in Angular: the browser is
+redirected to the issuer and the password is only ever typed there. The
+access page is a custom Keycloak theme.
+
+| File | Purpose |
+|---|---|
+| `infra/f11/keycloak-theme/Dockerfile` | `FROM quay.io/keycloak/keycloak:26.8.0` plus the theme. The base is already local, so the build is a copy and takes no download |
+| `infra/f11/keycloak-theme/sgsi-zta/login/login.ftl` | The two panel layout: identity on the left, credential form on the right |
+| `infra/f11/keycloak-theme/sgsi-zta/login/messages/messages_es.properties` | Spanish copy and the identity markup |
+| `infra/f11/keycloak-theme/sgsi-zta/login/resources/css/login.css` | The visual design, loaded after the base styles |
+| `infra/f11/keycloak-theme/sgsi-zta/login/resources/js/sgsi-login.js` | Show and hide the password |
+
+The theme inherits from `keycloak.v2`, which is the theme that actually
+carries the `field.ftl` and `buttons.ftl` helpers. Pointing `parent` at
+`keycloak` instead resolves to the legacy theme, which has no such helpers,
+and the login page answers 500.
+
+The realm selects it with `loginTheme = sgsi-zta`. To rebuild and deploy:
+
+```bash
+cd infra/f11/keycloak-theme
+docker build -t sgsi-zta-f11-keycloak:local .
+docker compose --env-file ../.env -f ../compose.yaml up -d --no-build keycloak
+```
+
+Public registration and password reset stay disabled in the realm, so the
+page shows the "accounts are created by the administrator" notice and informs
+about a lost password instead of offering a reset that no mail server could
+honour.

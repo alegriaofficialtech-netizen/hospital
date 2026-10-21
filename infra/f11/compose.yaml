@@ -8,7 +8,13 @@ x-logging: &default-logging
 
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.8.0
+    # Local image with the SGSI-ZTA Hospital Lab access theme baked in.
+    # The upstream image is the base and stays local: the build only copies
+    # the theme into /opt/keycloak/themes.
+    image: sgsi-zta-f11-keycloak:local
+    build:
+      context: ./keycloak-theme
+      dockerfile: Dockerfile
     container_name: sgsi-zta-f11-keycloak
     command: ["start-dev"]
     environment:
