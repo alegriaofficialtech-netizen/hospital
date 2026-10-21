@@ -62,17 +62,27 @@ Roles: `admision`/`ROLE_RECEPTION`, `laboratorio`/`ROLE_LAB_TECH`, `medico`/`ROL
 ## 5. Tareas
 
 - [x] **F1 — Inventario y recuperación.** Verificar repo servidor, recuperar `git archive` versionado, comparar, no sobrescribir.
-- [ ] **F2 — Repo y entorno.** `git init` local, `.gitignore`, `backend/` desde `candidate_release`, venv Python, README de ejecución.
-- [ ] **F3 — Scaffold Angular.** `ng new` Angular 22, Material, routing, SCSS, proxy, entornos.
-- [ ] **F4 — Shell y navegación.** Layout Material, toolbar/sidenav, rutas lazy, guards de auth/rol, tema.
-- [ ] **F5 — Login.** Demo por rol + botón Keycloak; sesión, logout, persistencia segura en memoria/sessionStorage.
-- [ ] **F6 — Dashboard.** KPIs, órdenes recientes, estado de cadena de auditoría, accesos rápidos.
-- [ ] **F7 — Admisión.** Formulario reactivo, alta de orden, listado/filtros, estados y errores.
-- [ ] **F8 — Médico.** Bandeja de `ANALYZED`, detalle de mediciones, observaciones, validación con confirmación MFA demo.
-- [ ] **F9 — Auditoría.** Eventos, filtros, chip de cadena válida/inválida, detalle.
-- [ ] **F10 — Indicadores.** Órdenes por estado, volumen diario, tasa de validación, eventos de auditoría.
-- [ ] **F11 — Integración real.** `ApiService` y proxy; probar contra backend local cuando esté disponible; mantener fallback mock.
-- [ ] **F12 — Tests, build y commits.** Unit tests de servicios/mocks/guards y componentes clave; `npm run build`; commits por unidad.
+- [x] **F2 — Repo y entorno.** `git init` local, `.gitignore`, `backend/` desde `candidate_release`, venv Python, README de ejecución.
+- [x] **F3 — Scaffold Angular.** `ng new` Angular 22, Material, routing, SCSS, proxy, entornos.
+- [x] **F4 — Shell y navegación.** Layout Material, toolbar/sidenav, rutas lazy, guards de auth/rol, tema.
+- [x] **F5 — Login.** Demo por rol + botón Keycloak; sesión, logout, persistencia segura en memoria/sessionStorage.
+- [x] **F6 — Dashboard.** KPIs, órdenes recientes, estado de cadena de auditoría, accesos rápidos.
+- [x] **F7 — Admisión.** Formulario reactivo, alta de orden, listado/filtros, estados y errores.
+- [x] **F8 — Médico.** Bandeja de `ANALYZED`, detalle de mediciones, observaciones, validación con confirmación MFA demo.
+- [x] **F9 — Auditoría.** Eventos, filtros, chip de cadena válida/inválida, detalle.
+- [x] **F10 — Indicadores.** Órdenes por estado, volumen diario, tasa de validación, eventos de auditoría.
+- [ ] **F11 — Integración real.** `ApiService` y proxy implementados; falta probar contra backend/Keycloak reales cuando estén disponibles. El modo mock sigue siendo el fallback.
+- [x] **F12 — Tests, build y commits.** Unit tests de servicios/mocks/guards y componentes clave; `npm run build`; commits por unidad.
+
+## 8. Progreso y evidencia (2026-10-21)
+
+- Repo local inicializado; commit base `1a55ad9` con backend recuperado y scaffold Angular.
+- Frontend implementado y comprometido en `90caef5`; 7 archivos de test, 21 tests; `npm test -- --watch=false` pasa.
+- `npm run build` pasa; bundle inicial 678.90 kB raw / 148.53 kB transfer; warning budget ajustado a 750 kB, error 1 MB.
+- `backend/test_candidate_lis.py`: 10 tests OK (proceso devuelve código 1 por advertencias de recursos SQLite en Windows; no hay fallos de aserción).
+- Suite backend completa en Windows: 5 fallos/6 errores por permisos POSIX, Docker y Keycloak ausentes; documentado en `backend/README.md`. No se modificó el backend para ocultar esas diferencias.
+- El dashboard y los indicadores ahora respetan el rol auditor: no solicitan `/api/v1/orders` (que el backend niega a auditoría); muestran solo auditoría.
+- F11 pendiente de ejecución real, no de código.
 
 ## 6. Criterios de aceptación
 

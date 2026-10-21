@@ -49,3 +49,10 @@ cd backend
 ```
 
 No ejecutar contra producción. Los tests usan SQLite temporal y claves de prueba.
+
+**Nota Windows:** la suite completa fue escrita para Linux y asume permisos POSIX
+`0600`, Docker y un Keycloak real. En Windows fallan las aserciones de modo de archivo,
+las pruebas que invocan `docker` y los flujos OAuth que requieren Keycloak. Esas fallas
+son de entorno, no del frontend. Para validar la suite completa, ejecutar en Linux/WSL o
+en el contenedor previsto. En Windows, el frontend funciona de forma independiente en
+modo mock; el backend real debe validarse en el entorno Linux objetivo.
