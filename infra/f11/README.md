@@ -127,6 +127,9 @@ The Dockerfile builds with `--configuration local-real` and
 
 Run only after the conditions above are met.
 
+> Superseded by `infra/f11/stack-ctl.sh`, which starts and stops each
+> component on its own and runs the gate first. Kept for reference.
+
 1. Validate the Compose model without starting containers:
 
    ```bash
@@ -156,25 +159,25 @@ Run only after the conditions above are met.
      --credentials-file /home/elcra/sgsi-zta-runtime/f11/credentials.json
    ```
 
-4. Install and start the backend unit **only with explicit authorization**:
+4. Start the backend. Installing the systemd unit still requires explicit
+   authorization, and this account cannot create cgroups on its own
+   (`systemd-run --scope` is denied, `cgexec` is absent), so the supported
+   path today is the host process in `stack-ctl.sh`:
 
    ```bash
-   sudo cp infra/f11/systemd/sgsi-zta-f11-backend.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl start sgsi-zta-f11-backend.service
+   infra/f11/stack-ctl.sh start backend
    curl -fsS http://127.0.0.1:8010/health
    ```
 
-   The unit is not installed or enabled by this preparation. It uses
-   `MemoryMax=512M`, `CPUQuota=50%`, and a restricted systemd sandbox. If systemd
-   installation is not authorized, the backend can be run manually, but it will
-   not have cgroup CPU/RAM limits.
+   The unit in `infra/f11/systemd` uses `MemoryMax=512M`, `CPUQuota=50%` and
+   a restricted sandbox. It is not installed or enabled by this preparation.
+   The host process approximates those limits with `taskset`, `ulimit -v` and
+   `nice`, which bound the process but do not reproduce a cgroup.
 
-5. Build and start the static frontend:
+5. Start the static frontend (the image already exists; never rebuild it here):
 
    ```bash
-   docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml build frontend
-   docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml up -d frontend
+   docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml up -d --no-build frontend
    curl -fsS http://127.0.0.1:4200/ >/dev/null
    ```
 
@@ -259,6 +262,85 @@ The first Playwright image build downloads npm dependencies and Chromium. It is
 a one-time Stage B step (`build-images.sh`), gated and skippable when the image
 is already present.
 
+## Lightweight Stage C (without Playwright)
+
+Stage B2 cannot be produced on this host: four supervised attempts with four
+different workloads all reached the 88 C ceiling, the last one a bare
+`docker pull` with no build at all. Ingesting roughly 2 GB is itself a
+thermal event here, so the Playwright path is suspended and Stage C runs
+without it: Keycloak, the Python backend and the static Angular frontend
+only.
+
+The decoupling lives in the preflight gate. The new `api` stage admits a
+running stack without the Playwright image, and the thermal ceiling of the
+start stages is 88 C.
+
+### Components
+
+| Component | Where | Limits |
+|---|---|---|
+| Keycloak | container `sgsi-zta-f11-keycloak` | 1.0 CPU, 1024 MiB, 512 pids (compose) |
+| Frontend | container `sgsi-zta-f11-frontend` | 0.25 CPU, 128 MiB, 64 pids (compose) |
+| Backend | host process, `backend/server.py` | `taskset` one core, `ulimit -v`, `nice` |
+
+The backend is a host process because the systemd unit is not installed and
+this account cannot create cgroups: `systemd-run --scope` answers "Access
+denied" and `cgexec` is absent. `taskset`, `ulimit -v` and `nice` approximate
+the unit's `MemoryMax=512M` and `CPUQuota=50%`; they do not reproduce them.
+
+### Start, one component at a time
+
+Every start runs the gate first. A refused gate means nothing comes up.
+
+```bash
+cd /home/elcra/sgsi-zta-integration
+
+infra/f11/stack-ctl.sh start keycloak    # gate (--stage up), then keycloak
+infra/f11/stack-ctl.sh start backend     # gate, then the host process
+infra/f11/stack-ctl.sh start frontend    # gate, then the static image
+infra/f11/stack-ctl.sh status
+```
+
+`start all` runs the gate once and then starts them in dependency order:
+Keycloak, backend, frontend. The frontend is always started with
+`--no-build`, so this stack never compiles on the host.
+
+### API suite: JWT, RBAC, MFA TOTP, audit
+
+```bash
+infra/f11/run-api-tests.sh
+```
+
+The script runs the gate with `--stage api` and then the suite in
+`infra/f11/api-tests/test_f11_api.py`. The suite uses only the standard
+library: it reuses the OIDC flow from `infra/local-test/setup_realm.py` to
+mint real tokens, and it covers a missing token, a malformed token, the
+reception, laboratory, pathologist and auditor policies, the refusal to
+validate without TOTP evidence, the refusal of the legacy login endpoint,
+and the presence of every denial in the immutable audit trail.
+
+### Manual UI from a Windows browser
+
+All hospital software stays on Debian. Windows only runs a browser, reached
+through an SSH tunnel that forwards the two loopback ports the stack is
+configured with: 4200 for the frontend, 8085 for the issuer.
+
+```powershell
+# on Windows
+.\infra\f11\tunnel.ps1 -Check   # are both ports answering?
+.\infra\f11\tunnel.ps1           # open the tunnel, then browse
+```
+
+Then open `http://127.0.0.1:4200` and sign in with the synthetic users listed
+by the script. `medico.test` asks for the TOTP code; its secret is in
+`credentials.json` on the server.
+
+### Stop
+
+```bash
+infra/f11/stack-ctl.sh stop all
+```
+
 ## Preflight gate
 
 `infra/f11/preflight-gate.sh` is the single admission control for every F11
@@ -328,7 +410,17 @@ infra/f11/preflight-gate.sh --stage e2e --json
 
 # enforce
 infra/f11/preflight-gate.sh --stage build
+
+# admit a running stack for the API suite (no Playwright image required)
+infra/f11/preflight-gate.sh --stage api
 ```
+
+| Stage | When | Requires |
+|---|---|---|
+| `build` | before Stage A compiles | free ports, no F11 stack, compile headroom |
+| `up` | before any component starts | free ports, no F11 stack, no backend |
+| `api` | before the API suite runs | the stack is up, `credentials.json`, keycloak + frontend images |
+| `e2e` | before the Playwright suite runs | the stack is up, `credentials.json`, `e2e-secrets.json`, the Playwright image |
 
 Exit codes: `0` allowed (warnings permitted), `1` refused, `2` usage error.
 State is kept in `$F11_RUNTIME_DIR/state/preflight.env` (boot id, OOM counter,
@@ -404,28 +496,31 @@ infra/f11/preflight-gate.sh --stage build
 # 1. compile (Stage A) -- no docker build involved
 infra/f11/build-artifacts.sh
 
-# 2. package (Stage B)
+# 2. package the runtime image (Stage B1); Stage B2 is suspended
 infra/f11/build-images.sh
 
-# 3. prepare E2E inputs
-infra/f11/prepare-e2e-secrets.sh          # writes $F11_RUNTIME_DIR/e2e-secrets.json
-#    credentials.json is produced by the realm bootstrap; verify its schema with
-#    the gate (--stage e2e) before starting anything.
+# 3. provision the synthetic realm (once per realm, needs Keycloak up)
+#    writes $F11_RUNTIME_DIR/credentials.json
 
 # 4. host must accept the stack
 infra/f11/preflight-gate.sh --stage up
 
-# 5. start the stack (explicit, never automatic)
-docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml up -d
-sudo systemctl start sgsi-zta-f11-backend
+# 5. start each component (explicit, never automatic; the gate runs again)
+infra/f11/stack-ctl.sh start keycloak
+infra/f11/stack-ctl.sh start backend
+infra/f11/stack-ctl.sh start frontend
 
-# 6. verify and test
+# 6. verify
 infra/f11/health-check.sh
-infra/f11/run-e2e.sh
 
-# 7. stop
-sudo systemctl stop sgsi-zta-f11-backend
-docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml down
+# 7. API suite (JWT, RBAC, MFA TOTP, audit) -- no Playwright involved
+infra/f11/run-api-tests.sh
+
+# 8. manual UI from a Windows browser over the SSH tunnel
+#    infra/f11/tunnel.ps1
+
+# 9. stop
+infra/f11/stack-ctl.sh stop all
 ```
 ## Known limitations
 
@@ -433,6 +528,12 @@ docker compose --env-file infra/f11/.env -f infra/f11/compose.yaml down
   real-stack validation until the remote E2E is re-run and the evidence is
   captured.
 - The Angular build is staged and cgroup-limited; see "Staged build".
-- The backend systemd unit is prepared but not installed or enabled.
+- The backend systemd unit is prepared but not installed or enabled. Without
+  it the backend runs as a host process with `taskset`, `ulimit -v` and
+  `nice`, which approximate the unit's cgroup limits without reproducing
+  them.
+- The Playwright path is suspended. The image cannot be built on this host
+  and the API suite does not cover the browser-rendered UI; the manual
+  session over the SSH tunnel is the current UI evidence.
 - The remote E2E paths and ports must be adapted to F11 before the full suite is
   considered valid.

@@ -32,7 +32,7 @@
 #
 # Usage
 # -----
-#   preflight-gate.sh [--stage build|up|e2e] [--report] [--json] [--allow-reboot]
+#   preflight-gate.sh [--stage build|up|api|e2e] [--report] [--json] [--allow-reboot]
 #
 #   --report        print the full evidence table, always exit 0
 #   --json          machine readable output
@@ -57,7 +57,7 @@ E2E_IMAGE="${F11_E2E_IMAGE:-sgsi-zta-f11-e2e:local}"
 PORTS=(8085 8010 4200)
 PROJECT_LABEL="com.sgsi-zta.project=f11"
 
-STAGE="e2e"
+STAGE="up"
 MODE="enforce"
 JSON=0
 ALLOW_REBOOT=0
@@ -83,8 +83,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$STAGE" in
-  build|up|e2e) ;;
-  *) echo "invalid stage '$STAGE' (expected build|up|e2e)" >&2; exit 2 ;;
+  build|up|api|e2e) ;;
+  *) echo "invalid stage '$STAGE' (expected build|up|api|e2e)" >&2; exit 2 ;;
 esac
 
 CORES="$(nproc 2>/dev/null || echo 4)"
@@ -102,12 +102,12 @@ case "$STAGE" in
     T_TEMP_FAIL=92;  T_TEMP_WARN=84
     T_DISK_FAIL=10                          # GiB
     ;;
-  up)
+  up|api)
     T_CPU_WARN=70
     T_PSI_FAIL=45;   T_PSI_WARN=30
     T_PSIIO_FAIL=20; T_PSIIO_WARN=10
     T_MEM_FAIL=3584; T_MEM_WARN=4608
-    T_TEMP_FAIL=90;  T_TEMP_WARN=82
+    T_TEMP_FAIL=88;  T_TEMP_WARN=82
     T_DISK_FAIL=8
     ;;
   e2e)
@@ -115,7 +115,7 @@ case "$STAGE" in
     T_PSI_FAIL=45;   T_PSI_WARN=30
     T_PSIIO_FAIL=20; T_PSIIO_WARN=8
     T_MEM_FAIL=3072; T_MEM_WARN=4096        # same 3 GiB floor as before
-    T_TEMP_FAIL=90;  T_TEMP_WARN=82
+    T_TEMP_FAIL=88;  T_TEMP_WARN=82
     T_DISK_FAIL=5
     ;;
 esac
@@ -386,7 +386,7 @@ fi
 # ---------------------------------------------------------------------------
 # 9. ports
 # ---------------------------------------------------------------------------
-if [[ "$STAGE" == "e2e" ]]; then
+if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
   busy=0
   for p in "${PORTS[@]}"; do if port_busy "$p"; then busy=$((busy + 1)); fi; done
   if (( busy == 0 )); then
@@ -413,8 +413,10 @@ RUNNING_NAMES="$(stack_running)"
 ALL_NAMES="$(stack_names)"
 BACKEND_ACTIVE=0
 if unit_active; then BACKEND_ACTIVE=1; fi
+# The backend may run as a host process instead of the (not installed) unit.
+if (( BACKEND_ACTIVE == 0 )) && port_busy 8010; then BACKEND_ACTIVE=1; fi
 
-if [[ "$STAGE" == "e2e" ]]; then
+if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
   missing=""
   if ! grep -q 'sgsi-zta-f11-keycloak' <<<"$RUNNING_NAMES"; then missing="${missing} keycloak"; fi
   if ! grep -q 'sgsi-zta-f11-frontend' <<<"$RUNNING_NAMES"; then missing="${missing} frontend"; fi
@@ -439,9 +441,9 @@ if [[ "$STAGE" == "e2e" ]]; then
   fi
 else
   if [[ -n "$ALL_NAMES" ]] || (( BACKEND_ACTIVE == 1 )); then
-    record stack FAIL "present" "F11 stack or backend unit already active"
+    record stack FAIL "present" "F11 stack or backend already active"
   else
-    record stack PASS "down" "no F11 containers, backend unit inactive"
+    record stack PASS "down" "no F11 containers, backend inactive"
   fi
 fi
 
@@ -458,42 +460,66 @@ fi
 # ---------------------------------------------------------------------------
 # 12. stage-specific prerequisites
 # ---------------------------------------------------------------------------
-if [[ "$STAGE" == "e2e" ]]; then
+if [[ "$STAGE" == "e2e" || "$STAGE" == "api" ]]; then
+  # The api stage needs the realm credentials to mint tokens. The e2e stage
+  # additionally needs the IoMT device secrets and the Playwright image.
   MISSING_INPUT=""
-  for f in "$CREDENTIALS" "$SECRETS"; do
-    [[ -r "$f" ]] || MISSING_INPUT="${MISSING_INPUT} ${f}"
-  done
+  if [[ "$STAGE" == "e2e" ]]; then
+    for f in "$CREDENTIALS" "$SECRETS"; do
+      [[ -r "$f" ]] || MISSING_INPUT="${MISSING_INPUT} ${f}"
+    done
+  else
+    [[ -r "$CREDENTIALS" ]] || MISSING_INPUT="${MISSING_INPUT} ${CREDENTIALS}"
+  fi
   if [[ -n "$MISSING_INPUT" ]]; then
     record inputs FAIL "missing" "unreadable:${MISSING_INPUT}"
   else
-    if python3 - "$CREDENTIALS" "$SECRETS" >/dev/null 2>&1 <<'PY'
+    if python3 - "$CREDENTIALS" "$SECRETS" "$STAGE" >/dev/null 2>&1 <<'PY'
 import json, sys
+stage = sys.argv[3]
 c = json.load(open(sys.argv[1], encoding="utf-8"))
-s = json.load(open(sys.argv[2], encoding="utf-8"))
 need_c = {"issuer", "realm", "clientId", "redirectUri", "users"}
 if need_c - set(c):
     raise SystemExit(1)
-for user in ("recepcion.test", "medico.test"):
-    if user not in c["users"]:
+users = c["users"]
+if stage == "api":
+    required = ("recepcion.test", "laboratorio.test", "medico.test",
+                "medico.sinmfa", "auditor.test")
+else:
+    required = ("recepcion.test", "medico.test")
+for user in required:
+    if user not in users:
         raise SystemExit(1)
-if {"iomtDeviceId", "iomtDeviceKey"} - set(s):
-    raise SystemExit(1)
+if stage == "api":
+    # the API suite computes current TOTP codes from this secret
+    if not users["medico.test"].get("totp_secret"):
+        raise SystemExit(1)
+else:
+    s = json.load(open(sys.argv[2], encoding="utf-8"))
+    if {"iomtDeviceId", "iomtDeviceKey"} - set(s):
+        raise SystemExit(1)
 PY
     then
-      record inputs PASS "schema ok" "credentials + secrets readable and shaped correctly"
+      record inputs PASS "schema ok" "credentials readable and shaped correctly"
     else
-      record inputs FAIL "schema" "credentials.json or e2e-secrets.json has an unexpected shape"
+      record inputs FAIL "schema" "credentials.json has an unexpected shape"
     fi
   fi
 
   MISSING_IMG=""
-  for img in "$KEYCLOAK_IMAGE" "$FRONTEND_IMAGE" "$E2E_IMAGE"; do
-    docker image inspect "$img" >/dev/null 2>&1 || MISSING_IMG="${MISSING_IMG} ${img}"
-  done
+  if [[ "$STAGE" == "e2e" ]]; then
+    for img in "$KEYCLOAK_IMAGE" "$FRONTEND_IMAGE" "$E2E_IMAGE"; do
+      docker image inspect "$img" >/dev/null 2>&1 || MISSING_IMG="${MISSING_IMG} ${img}"
+    done
+  else
+    for img in "$KEYCLOAK_IMAGE" "$FRONTEND_IMAGE"; do
+      docker image inspect "$img" >/dev/null 2>&1 || MISSING_IMG="${MISSING_IMG} ${img}"
+    done
+  fi
   if [[ -n "$MISSING_IMG" ]]; then
     record images FAIL "missing" "build stages first:${MISSING_IMG}"
   else
-    record images PASS "present" "keycloak + frontend + e2e images"
+    record images PASS "present" "keycloak + frontend images present"
   fi
 fi
 
