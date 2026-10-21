@@ -30,6 +30,7 @@ if CURRENT_DIR not in sys.path:
 from identity_admin import (
     IdentityAdminClient,
     IdentityAdminError,
+    deliver_credential,
     generate_password,
     summarise_users,
     validate_username,
@@ -134,6 +135,9 @@ KEYCLOAK_ADMIN_URL = os.environ.get("KEYCLOAK_ADMIN_URL", "http://127.0.0.1:8085
 KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
 KEYCLOAK_ADMIN_USERNAME = os.environ.get("KEYCLOAK_ADMIN_USERNAME", "")
 KEYCLOAK_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "")
+IDENTITY_RUNTIME_DIR = os.environ.get(
+    "F11_RUNTIME_DIR", "/home/elcra/sgsi-zta-runtime/f11"
+)
 
 
 def get_identity_admin() -> IdentityAdminClient:
@@ -638,12 +642,16 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             "Identidad sintetica creada con roles %s" % ",".join(sorted(roles)),
             client_ip, context.mfa_verified,
         )
+        credential_file = deliver_credential(
+            IDENTITY_RUNTIME_DIR, username, temporary_password,
+        )
         self.send_json(201, {
             "identity": identity,
-            "temporary_password": temporary_password,
+            "credential_file": credential_file,
             "note": (
-                "La contrasena se muestra una sola vez y no se registra en la "
-                "cadena de auditoria."
+                "La contrasena no se devuelve al navegador: queda en un fichero "
+                "0600 en el servidor, que el operador recoge por un canal fuera "
+                "de banda. No se registra en la auditoria."
             ),
         })
 
@@ -712,12 +720,15 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             "ALLOWED", "Contrasena rotada de la identidad %s" % user_id,
             client_ip, context.mfa_verified,
         )
+        credential_file = deliver_credential(
+            IDENTITY_RUNTIME_DIR, user_id, temporary_password,
+        )
         self.send_json(200, {
             "id": user_id,
-            "temporary_password": temporary_password,
+            "credential_file": credential_file,
             "note": (
-                "La contrasena se muestra una sola vez y no se registra en la "
-                "cadena de auditoria."
+                "La contrasena no se devuelve al navegador: queda en un fichero "
+                "0600 en el servidor."
             ),
         })
 

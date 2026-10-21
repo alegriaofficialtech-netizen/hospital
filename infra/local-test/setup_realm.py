@@ -715,11 +715,6 @@ class BrowserFlow:
                     "state": state,
                     "code_challenge": challenge,
                     "code_challenge_method": "S256",
-                    # El aprovisionamiento detecta las pantallas por marcadores
-                    # en ingles. Con el realm en espanol esas cadenas no
-                    # aparecen, asi que el flujo se fuerza a ingles. La
-                    # experiencia del usuario sigue en espanol.
-                    "kc_locale": "en",
                 }
             )
         )
@@ -749,10 +744,14 @@ class BrowserFlow:
                 )
             if location and has_authorization_code(location):
                 break
+            # La deteccion no puede depender del idioma: el realm puede
+            # funcionar en espanol. Los identificadores de la plantilla son
+            # estables y la marca en ingles se conserva como tercer caso.
             if status == 200 and (
                 "kc-totp-secret-key" in html
                 or "mode-manual" in html
                 or "CONFIGURE_TOTP" in html
+                or "CONFIGURAR" in html.upper()
             ):
                 manual_match = re.search(r'id="mode-manual"[^>]+href="([^"]+)"', html)
                 if not manual_match:

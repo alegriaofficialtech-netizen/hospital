@@ -45,6 +45,12 @@ const NAV_ITEMS: readonly NavItem[] = [
     roles: ['ROLE_SECURITY_AUDITOR'],
   },
   {
+    label: 'Administración de identidades',
+    icon: 'manage_accounts',
+    route: '/administracion',
+    roles: ['ROLE_PLATFORM_ADMIN'],
+  },
+  {
     label: 'Indicadores',
     icon: 'monitoring',
     route: '/indicadores',

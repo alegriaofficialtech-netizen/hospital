@@ -1,0 +1,207 @@
+<section class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Administración de identidades</h1>
+      <p class="page-subtitle">
+        Cuentas sintéticas del realm, con sus roles clínicos y el estado de acceso.
+        La gestión exige doble factor y queda registrada en la auditoría.
+      </p>
+    </div>
+    <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
+      <mat-icon>refresh</mat-icon>
+      Actualizar
+    </button>
+  </header>
+
+  @if (summary(); as data) {
+    <div class="kpi-grid">
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon">group</mat-icon>
+        <span class="kpi-label">Cuentas</span>
+        <strong class="kpi-value">{{ data.total }}</strong>
+        <span class="kpi-hint">{{ data.enabled }} activas</span>
+      </mat-card>
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon warning">lock_clock</mat-icon>
+        <span class="kpi-label">Con doble factor</span>
+        <strong class="kpi-value">{{ data.mfa_required }}</strong>
+        <span class="kpi-hint">exigen TOTP</span>
+      </mat-card>
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon success">how_to_reg</mat-icon>
+        <span class="kpi-label">Sintéticas</span>
+        <strong class="kpi-value">{{ data.total }}</strong>
+        <span class="kpi-hint">ninguna cuenta real</span>
+      </mat-card>
+    </div>
+  }
+
+  <mat-card class="form-card">
+    <div class="card-heading">
+      <div>
+        <h2>Nueva cuenta sintética</h2>
+        <p>El nombre termina en <code>.test</code> y la credencial queda en el servidor.</p>
+      </div>
+    </div>
+
+    <form class="identity-form" (ngSubmit)="create()">
+      <mat-form-field appearance="outline">
+        <mat-label>Nombre de la cuenta</mat-label>
+        <input
+          matInput
+          name="username"
+          autocomplete="off"
+          [ngModel]="newUsername()"
+          (ngModelChange)="newUsername.set($event)"
+          placeholder="residente.test"
+        />
+        <mat-icon matSuffix>badge</mat-icon>
+      </mat-form-field>
+
+      <div class="role-picker">
+        <p class="section-label">Roles clínicos</p>
+        <div class="role-grid">
+          @for (role of assignableRoles; track role.name) {
+            <button
+              mat-stroked-button
+              type="button"
+              class="role-button"
+              [class.role-selected]="isRoleSelected(role.name)"
+              (click)="toggleRole(role.name, !isRoleSelected(role.name))"
+            >
+              <mat-icon>{{ isRoleSelected(role.name) ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
+              <span class="role-copy">
+                <strong>{{ role.label }}</strong>
+                <small>{{ role.description }}</small>
+                @if (role.requiresMfa) {
+                  <small class="role-requirement">Exige doble factor</small>
+                }
+              </span>
+            </button>
+          }
+        </div>
+      </div>
+
+      <mat-checkbox
+        [checked]="newRequiresMfa()"
+        (change)="newRequiresMfa.set($event.checked)"
+      >
+        Exigir doble factor a la cuenta
+      </mat-checkbox>
+
+      @if (formError(); as problem) {
+        <p class="inline-error" role="alert">
+          <mat-icon>error_outline</mat-icon>
+          <span>{{ problem }}</span>
+        </p>
+      }
+
+      <button
+        mat-flat-button
+        color="primary"
+        type="submit"
+        class="submit-button"
+        [disabled]="creating()"
+      >
+        <mat-icon>{{ creating() ? 'hourglass_top' : 'person_add' }}</mat-icon>
+        {{ creating() ? 'Creando…' : 'Crear cuenta sintética' }}
+      </button>
+    </form>
+  </mat-card>
+
+  <mat-card class="table-card">
+    <div class="card-heading table-heading">
+      <div>
+        <h2>Cuentas del realm</h2>
+        <p>{{ filtered().length }} de {{ identities().length }} cuentas.</p>
+      </div>
+      <mat-form-field appearance="outline" class="filter-field">
+        <mat-label>Buscar</mat-label>
+        <input
+          matInput
+          name="search"
+          autocomplete="off"
+          [ngModel]="search()"
+          (ngModelChange)="onSearch($event)"
+          placeholder="usuario o rol"
+        />
+        <mat-icon matSuffix>search</mat-icon>
+      </mat-form-field>
+    </div>
+
+    @if (loading()) {
+      <div class="loading-row">
+        <mat-spinner diameter="32" />
+        <span>Cargando identidades…</span>
+      </div>
+    } @else {
+      <div class="table-wrap">
+        <table mat-table [dataSource]="filtered()" class="app-table">
+          <ng-container matColumnDef="identity">
+            <th mat-header-cell *matHeaderCellDef>Cuenta</th>
+            <td mat-cell *matCellDef="let identity">
+              <strong>{{ identity.username }}</strong>
+              @if (!identity.synthetic) {
+                <small class="tag-warning">no marcada como sintética</small>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="roles">
+            <th mat-header-cell *matHeaderCellDef>Roles</th>
+            <td mat-cell *matCellDef="let identity">
+              <mat-chip-set>
+                @for (role of identity.realm_roles; track role) {
+                  <mat-chip [highlighted]="role === 'sgsi-admin' || role === 'mfa-required'">
+                    {{ role }}
+                  </mat-chip>
+                }
+              </mat-chip-set>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="mfa">
+            <th mat-header-cell *matHeaderCellDef>Doble factor</th>
+            <td mat-cell *matCellDef="let identity">
+              @if (identity.realm_roles.includes('mfa-required')) {
+                <mat-chip highlighted>TOTP</mat-chip>
+              } @else {
+                <mat-chip>no exigido</mat-chip>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="state">
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
+            <td mat-cell *matCellDef="let identity">
+              @if (identity.enabled) {
+                <mat-chip class="chip-ok">activa</mat-chip>
+              } @else {
+                <mat-chip class="chip-off">desactivada</mat-chip>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let identity">
+              <button
+                mat-stroked-button
+                type="button"
+                (click)="setEnabled(identity, !identity.enabled)"
+              >
+                {{ identity.enabled ? 'Desactivar' : 'Activar' }}
+              </button>
+              <button mat-stroked-button type="button" (click)="resetPassword(identity)">
+                Restablecer clave
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="columns"></tr>
+          <tr mat-row *matRowDef="let row; columns: columns"></tr>
+        </table>
+      </div>
+    }
+  </mat-card>
+</section>

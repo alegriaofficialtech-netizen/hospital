@@ -22,6 +22,7 @@ Reglas del diseno:
 from __future__ import annotations
 
 import json
+import pathlib
 import secrets
 import urllib.error
 import urllib.parse
@@ -29,6 +30,11 @@ import urllib.request
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 SYNTHETIC_SUFFIX = ".test"
+
+# El rol de administrador de plataforma no se concede desde la propia
+# aplicacion: hacerlo permitiria el escalamiento. Solo lo concede el
+# aprovisionamiento, con el administrador de Keycloak.
+PROTECTED_ROLES = frozenset({"sgsi-admin"})
 SYNTHETIC_ATTRIBUTE = "f11"
 SYNTHETIC_MARKER = "sintetico"
 MIN_PASSWORD_LENGTH = 16
@@ -244,6 +250,13 @@ class IdentityAdminClient:
     def set_user_roles(self, user_id: str, roles: Sequence[str]) -> List[str]:
         catalogue = {r["name"]: r for r in self.list_roles()}
         available = set(catalogue)
+        forbidden = sorted(set(roles) & PROTECTED_ROLES)
+        if forbidden:
+            raise IdentityAdminError(
+                "el rol %s no se puede conceder desde la aplicacion" % ", ".join(forbidden),
+                status=403,
+                code="IDENTITY_PROTECTED_ROLE",
+            )
         wanted = [r for r in roles if r in available]
         unknown = [r for r in roles if r not in available]
         if unknown:
@@ -306,6 +319,41 @@ class IdentityAdminClient:
     def require_role(self, user_id: str, role: str) -> bool:
         current = self.get_user(user_id)
         return role in (current.get("realmRoles") or [])
+
+
+def deliver_credential(
+    runtime_dir: str,
+    username: str,
+    password: str,
+    stamp: Optional[str] = None,
+) -> str:
+    """Escribe la credencial en un fichero 0600 y devuelve su ruta.
+
+    La contrasena nunca viaja al navegador, ni se guarda en la base de datos,
+    ni aparece en la auditoria. Solo queda en un fichero que el operador
+    recoge en el servidor.
+    """
+    import os
+    import stat
+    import time
+
+    target = pathlib.Path(runtime_dir) / "identities"
+    target.mkdir(parents=True, exist_ok=True)
+    os.chmod(target, 0o700)
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    safe = "".join(ch for ch in username if ch.isalnum() or ch in "-_.") or "identity"
+    path = target / ("%s-%s.credential" % (safe, stamp))
+    handle = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(handle, "w", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {"username": username, "password": password, "issued_at": stamp},
+                indent=2,
+            )
+            + "\n",
+        )
+    os.chmod(str(path), stat.S_IRUSR | stat.S_IWUSR)
+    return str(path)
 
 
 def generate_password(length: int = 20) -> str:
