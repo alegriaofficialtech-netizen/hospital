@@ -17,18 +17,6 @@ interface DemoRole {
   icon: string;
 }
 
-/**
- * Informational card for a clinical role. It is not a login affordance: the
- * only way into the stack in real mode is the Keycloak button above.
- */
-interface ClinicalRole {
-  role: UserRole;
-  label: string;
-  description: string;
-  requirement: string;
-  icon: string;
-}
-
 @Component({
   selector: 'app-login',
   standalone: true,
@@ -51,14 +39,12 @@ export class LoginComponent {
   username = 'demo.reception';
   readonly error = signal<string | null>(null);
   readonly loading = signal(false);
-  readonly keycloakEnabled = !environment.useMockAuth;
-
-  /** The real issuer the browser will talk to, shown so the operator can verify it. */
-  readonly keycloakUrl = environment.keycloak.url;
-  readonly realm = environment.keycloak.realm;
 
   /** Reason the OIDC client could not be initialised, if that happened. */
   readonly initError = this.auth.keycloakInitError;
+
+  /** True only in the mock profile. The real build never shows the demo block. */
+  readonly isDemo = environment.useMockAuth;
 
   readonly demoRoles: readonly DemoRole[] = [
     {
@@ -83,41 +69,6 @@ export class LoginComponent {
       role: 'ROLE_SECURITY_AUDITOR',
       label: 'Auditor de seguridad',
       description: 'Inspeccionar la cadena de auditoría',
-      icon: 'verified_user',
-    },
-  ];
-
-  /**
-   * The real realm roles, described for the operator. These are the roles
-   * Keycloak grants; the LIS maps them to the RBAC model.
-   */
-  readonly clinicalRoles: readonly ClinicalRole[] = [
-    {
-      role: 'ROLE_RECEPTION',
-      label: 'Recepción (admision)',
-      description: 'Crea la orden preanalítica del paciente.',
-      requirement: 'Sin MFA · puede leer y listar órdenes',
-      icon: 'assignment_ind',
-    },
-    {
-      role: 'ROLE_LAB_TECH',
-      label: 'Laboratorio (laboratorio)',
-      description: 'Consulta las órdenes y sus resultados.',
-      requirement: 'Sin MFA · no puede crear ni validar',
-      icon: 'science',
-    },
-    {
-      role: 'ROLE_PATHOLOGIST',
-      label: 'Patólogo (medico)',
-      description: 'Firma y libera el informe analítico.',
-      requirement: 'MFA TOTP obligatoria · rol mfa-required',
-      icon: 'biotech',
-    },
-    {
-      role: 'ROLE_SECURITY_AUDITOR',
-      label: 'Auditor (auditor)',
-      description: 'Lee la auditoría y verifica la cadena de hashes.',
-      requirement: 'Sin MFA · acceso exclusivo a la auditoría',
       icon: 'verified_user',
     },
   ];

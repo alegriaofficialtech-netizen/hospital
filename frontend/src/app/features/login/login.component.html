@@ -1,104 +1,105 @@
 <div class="login-page">
-  <mat-card class="login-card">
-    <mat-card-header>
-      <div class="brand-row">
-        <mat-icon class="brand-icon">local_hospital</mat-icon>
-        <div>
-          <mat-card-title>SGSI-ZTA Hospital Lab</mat-card-title>
-          <mat-card-subtitle>Flujo clínico Zero Trust</mat-card-subtitle>
-        </div>
+  <div class="login-layout">
+    <section class="brand-panel" aria-hidden="true">
+      <div class="brand-content">
+        <span class="brand-mark">
+          <mat-icon>local_hospital</mat-icon>
+        </span>
+        <h1 class="brand-title">SGSI-ZTA Hospital Lab</h1>
+        <p class="brand-subtitle">Plataforma clínica Zero Trust</p>
+
+        <ul class="brand-points">
+          <li>
+            <mat-icon>badge</mat-icon>
+            <span>Acceso restringido a personal autorizado</span>
+          </li>
+          <li>
+            <mat-icon>shield</mat-icon>
+            <span>Autenticación OIDC con doble factor</span>
+          </li>
+          <li>
+            <mat-icon>history</mat-icon>
+            <span>Registro de auditoría inmutable</span>
+          </li>
+        </ul>
       </div>
-    </mat-card-header>
+    </section>
 
-    <mat-card-content>
-      @if (keycloakEnabled) {
-        <p class="demo-notice">
-          Modo real: la autenticación se delega por completo en el Keycloak aislado
-          (<code>{{ keycloakUrl }}</code>, realm <code>{{ realm }}</code>) con usuarios
-          sintéticos. El patólogo debe superar el desafío TOTP para poder validar.
-        </p>
+    <section class="login-panel">
+      <mat-card class="login-card" appearance="outlined">
+        <mat-card-content>
+          <h2 class="login-title">Iniciar sesión</h2>
+          <p class="login-lead">
+            Identifíquese con sus credenciales corporativas para acceder al laboratorio.
+          </p>
 
-        <div class="divider"><span>Acceso</span></div>
+          <button
+            mat-flat-button
+            color="primary"
+            type="button"
+            class="login-button"
+            [disabled]="loading()"
+            (click)="loginWithKeycloak()"
+          >
+            <mat-icon>{{ loading() ? 'hourglass_top' : 'login' }}</mat-icon>
+            {{ loading() ? 'Abriendo el acceso…' : 'Iniciar sesión' }}
+          </button>
 
-        <button
-          mat-flat-button
-          color="primary"
-          type="button"
-          class="full-width keycloak-button"
-          [disabled]="loading()"
-          (click)="loginWithKeycloak()"
-        >
-          <mat-icon>login</mat-icon>
-          Acceder con Keycloak
-        </button>
-
-        @if (initError(); as message) {
-          <p class="error" role="alert">{{ message }}</p>
-        }
-
-        @if (error(); as message) {
-          <p class="error" role="alert">{{ message }}</p>
-        }
-
-        <p class="section-label">Roles clínicos del realm {{ realm }}</p>
-        <div class="role-grid">
-          @for (item of clinicalRoles; track item.role) {
-            <div class="role-card">
-              <mat-icon>{{ item.icon }}</mat-icon>
-              <span class="role-copy">
-                <strong>{{ item.label }}</strong>
-                <small>{{ item.description }}</small>
-                <small class="role-requirement">{{ item.requirement }}</small>
-              </span>
-            </div>
+          @if (initError(); as message) {
+            <p class="login-error" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ message }}</span>
+            </p>
           }
-        </div>
 
-        <p class="mock-hint">
-          OIDC Authorization Code + PKCE S256 · JWT firmado con RS256 · TOTP obligatorio
-          para validar · auditoría encadenada e inmutable. Los accesos directos de demo
-          están desactivados en modo real: el único acceso válido es el de Keycloak.
-        </p>
-      } @else {
-        <p class="demo-notice">
-          Modo demo: solo datos sintéticos. La validación exige un MFA simulado.
-        </p>
-
-        <mat-form-field appearance="outline" class="full-width">
-          <mat-label>Usuario</mat-label>
-          <input
-            matInput
-            name="username"
-            autocomplete="username"
-            [(ngModel)]="username"
-            placeholder="demo.reception"
-          />
-          <mat-icon matSuffix>person</mat-icon>
-        </mat-form-field>
-
-        <p class="section-label">Roles de demo</p>
-        <div class="role-grid">
-          @for (item of demoRoles; track item.role) {
-            <button
-              mat-stroked-button
-              type="button"
-              class="role-button"
-              (click)="loginDemo(item.role)"
-            >
-              <mat-icon>{{ item.icon }}</mat-icon>
-              <span class="role-copy">
-                <strong>{{ item.label }}</strong>
-                <small>{{ item.description }}</small>
-              </span>
-            </button>
+          @if (error(); as message) {
+            <p class="login-error" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ message }}</span>
+            </p>
           }
-        </div>
 
-        <p class="mock-hint">
-          Keycloak está desactivado mientras la autenticación demo esté activa. Usa
-          <code>useMockAuth: false</code> para apuntar al emisor real.
-        </p>
-      }
-    </mat-card-content>
-  </mat-card>
+          @if (isDemo) {
+            <details class="demo-block">
+              <summary>Accesos directos de demostración</summary>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Usuario</mat-label>
+                <input
+                  matInput
+                  name="username"
+                  autocomplete="username"
+                  [(ngModel)]="username"
+                  placeholder="demo.reception"
+                />
+                <mat-icon matSuffix>person</mat-icon>
+              </mat-form-field>
+
+              <div class="role-grid">
+                @for (item of demoRoles; track item.role) {
+                  <button
+                    mat-stroked-button
+                    type="button"
+                    class="role-button"
+                    (click)="loginDemo(item.role)"
+                  >
+                    <mat-icon>{{ item.icon }}</mat-icon>
+                    <span class="role-copy">
+                      <strong>{{ item.label }}</strong>
+                      <small>{{ item.description }}</small>
+                    </span>
+                  </button>
+                }
+              </div>
+            </details>
+          } @else {
+            <p class="login-hint">
+              Entorno de evaluación con usuarios sintéticos. La validación clínica exige
+              doble factor.
+            </p>
+          }
+        </mat-card-content>
+      </mat-card>
+    </section>
+  </div>
 </div>

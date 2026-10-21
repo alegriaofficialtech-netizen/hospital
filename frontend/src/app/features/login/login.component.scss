@@ -2,52 +2,186 @@
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 1.5rem;
+  padding: clamp(1rem, 3vw, 2.5rem);
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--mat-sys-primary) 14%, transparent), transparent 45%),
-    var(--mat-sys-surface-container-low);
+    radial-gradient(
+      circle at 12% 8%,
+      color-mix(in srgb, var(--mat-sys-primary) 16%, transparent),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 88% 92%,
+      color-mix(in srgb, var(--mat-sys-tertiary) 12%, transparent),
+      transparent 46%
+    ),
+    var(--mat-sys-surface-container-lowest);
+}
+
+.login-layout {
+  width: min(1080px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: stretch;
+}
+
+/* --- identity panel -------------------------------------------------- */
+
+.brand-panel {
+  display: grid;
+  align-content: center;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border-radius: 20px;
+  color: var(--mat-sys-on-primary);
+  background:
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--mat-sys-primary) 92%, #000 8%),
+      color-mix(in srgb, var(--mat-sys-tertiary) 78%, #000 22%)
+    );
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.16),
+    0 12px 32px rgb(0 0 0 / 0.18);
+}
+
+.brand-content {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 34ch;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: rgb(255 255 255 / 0.16);
+  backdrop-filter: blur(2px);
+
+  mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+  }
+}
+
+.brand-title {
+  margin: 0.35rem 0 0;
+  font: var(--mat-sys-headline-medium);
+  letter-spacing: -0.01em;
+}
+
+.brand-subtitle {
+  margin: 0;
+  font: var(--mat-sys-title-medium);
+  opacity: 0.86;
+}
+
+.brand-points {
+  list-style: none;
+  margin: 1.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.9rem;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    font: var(--mat-sys-body-medium);
+    opacity: 0.94;
+  }
+
+  mat-icon {
+    font-size: 22px;
+    width: 22px;
+    height: 22px;
+    opacity: 0.9;
+  }
+}
+
+/* --- login card ------------------------------------------------------ */
+
+.login-panel {
+  display: grid;
+  align-content: center;
 }
 
 .login-card {
-  width: min(560px, 100%);
-  padding: 0.5rem;
+  border-radius: 20px;
+  background: var(--mat-sys-surface);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.08),
+    0 16px 40px rgb(0 0 0 / 0.12);
 }
 
-.brand-row {
+.login-title {
+  margin: 0 0 0.35rem;
+  font: var(--mat-sys-headline-small);
+  letter-spacing: -0.01em;
+}
+
+.login-lead {
+  margin: 0 0 1.75rem;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-medium);
+  line-height: 1.5;
+}
+
+.login-button {
+  width: 100%;
+  height: 52px;
+  border-radius: 12px;
+  font: var(--mat-sys-title-medium);
+  letter-spacing: 0.01em;
+}
+
+.login-error {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding-top: 1rem;
-  color: var(--mat-sys-primary);
-}
-
-.brand-icon {
-  font-size: 2.5rem;
-  width: 2.5rem;
-  height: 2.5rem;
-}
-
-.demo-notice {
-  margin: 1rem 0;
-  padding: 0.75rem 1rem;
-  border-left: 4px solid var(--mat-sys-tertiary);
-  background: var(--mat-sys-surface-container-high);
-  border-radius: 0.25rem;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  border-left: 3px solid var(--mat-sys-error);
+  background: var(--mat-sys-error-container);
+  color: var(--mat-sys-on-error-container);
   font: var(--mat-sys-body-small);
+  line-height: 1.45;
 
-  code {
-    font-size: 0.8rem;
+  mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+    flex: none;
+  }
+}
+
+.login-hint {
+  margin: 1.5rem 0 0;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-small);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* --- demo profile only (never shown in real mode) --------------------- */
+
+.demo-block {
+  margin: 1.5rem 0 0;
+
+  summary {
+    cursor: pointer;
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-label-large);
+    list-style: none;
   }
 }
 
 .full-width {
   width: 100%;
-}
-
-.section-label {
-  margin: 1.25rem 0 0.5rem;
-  color: var(--mat-sys-on-surface-variant);
-  font: var(--mat-sys-label-large);
+  margin-top: 1rem;
 }
 
 .role-grid {
@@ -75,85 +209,35 @@
   }
 }
 
-/* Informational card for a clinical role. Not interactive on purpose: the
-   only authentication path in real mode is the Keycloak button. */
-.role-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.7rem 0.75rem;
-  border: 1px solid var(--mat-sys-outline-variant);
-  border-radius: 0.5rem;
-  background: var(--mat-sys-surface-container-low);
+/* --- responsive ------------------------------------------------------ */
 
-  .role-copy {
-    display: grid;
-    gap: 0.15rem;
+@media (max-width: 900px) {
+  .login-layout {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  small {
-    color: var(--mat-sys-on-surface-variant);
-    font: var(--mat-sys-body-small);
-    white-space: normal;
+  .brand-panel {
+    padding: 1.5rem;
   }
 
-  .role-requirement {
-    color: var(--mat-sys-primary);
-    font: var(--mat-sys-label-small);
+  .brand-points {
+    margin-top: 1.1rem;
   }
-}
-
-.divider {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin: 1.25rem 0;
-  color: var(--mat-sys-on-surface-variant);
-
-  span {
-    color: var(--mat-sys-on-surface-variant);
-    font: var(--mat-sys-label-medium);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  &::before,
-  &::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--mat-sys-outline-variant);
-  }
-}
-
-.keycloak-button {
-  height: 44px;
-}
-
-.error {
-  margin: 1rem 0 0;
-  padding: 0.6rem 0.75rem;
-  border-left: 4px solid var(--mat-sys-error);
-  border-radius: 0.25rem;
-  background: var(--mat-sys-error-container);
-  color: var(--mat-sys-on-error-container);
-  font: var(--mat-sys-body-medium);
-}
-
-.mock-hint {
-  margin: 1.25rem 0 0;
-  color: var(--mat-sys-on-surface-variant);
-  font: var(--mat-sys-body-small);
-  line-height: 1.45;
-  text-align: center;
-}
-
-.mock-hint code {
-  font-size: 0.8rem;
 }
 
 @media (max-width: 480px) {
   .role-grid {
     grid-template-columns: 1fr;
+  }
+
+  .brand-title {
+    font: var(--mat-sys-title-large);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-card,
+  .brand-panel {
+    box-shadow: none;
   }
 }

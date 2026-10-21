@@ -11,7 +11,12 @@ const STORAGE_KEY = 'sgsi-zta.session';
  * reason: the promise never settled, so the loading state never cleared.
  */
 const KEYCLOAK_INIT_TIMEOUT_MS = 10_000;
-const KEYCLOAK_LOGIN_TIMEOUT_MS = 15_000;
+/**
+ * The redirect adapter of keycloak-js navigates the page and never settles
+ * its promise, so the navigation is raced against a short grace period
+ * instead of being awaited.
+ */
+const KEYCLOAK_LOGIN_GRACE_MS = 3_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -140,12 +145,32 @@ export class AuthService {
       this.applyKeycloakSession(this.keycloak);
       return;
     }
-    await withTimeout(
-      this.keycloak.login({
+    const before = window.location.href;
+    let navigationError: unknown = null;
+    const navigation = this.keycloak
+      .login({
         redirectUri: `${window.location.origin}/dashboard`,
-      }),
-      KEYCLOAK_LOGIN_TIMEOUT_MS,
-    );
+      })
+      .catch((error: unknown) => {
+        navigationError = error;
+      });
+    await Promise.race([
+      navigation,
+      new Promise((resolve) => setTimeout(resolve, KEYCLOAK_LOGIN_GRACE_MS)),
+    ]);
+    if (navigationError) {
+      throw new Error(
+        navigationError instanceof Error
+          ? navigationError.message
+          : 'No se pudo abrir la ventana de acceso de Keycloak.',
+      );
+    }
+    if (window.location.href === before) {
+      throw new Error(
+        'No se pudo abrir la ventana de acceso de Keycloak. Comprueba que el tunel SSH ' +
+          'este abierto y que el emisor responde.',
+      );
+    }
   }
 
   markMfaVerified(): void {
@@ -188,7 +213,15 @@ export class AuthService {
       this.keycloak = keycloak;
       const authenticated = await withTimeout(
         keycloak.init({
-          onLoad: 'check-sso',
+          // No onLoad on purpose. With onLoad: 'check-sso' and
+          // checkLoginIframe: false, keycloak-js sets its internal
+          // #loginIframe.enable to false and takes the doLogin(false) path,
+          // which navigates the page to the issuer with prompt=none on every
+          // load. That turned into a redirect loop, and because the redirect
+          // adapter never settles its promise, initialize() stayed pending
+          // for ever and the login button was stranded with a timeout.
+          // Without onLoad the client only loads the discovery document, and
+          // a callback from a completed login is still processed by init().
           pkceMethod: 'S256',
           checkLoginIframe: false,
         }),
