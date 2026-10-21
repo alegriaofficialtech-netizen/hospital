@@ -132,7 +132,9 @@ class IdentityAdminSuite(unittest.TestCase):
 
     def test_05_admin_creates_and_deactivates_a_synthetic_identity(self):
         token = self.token("medico.test")
-        username = "prueba.test"
+        # Nombre unico por ejecucion: el emisor rechaza el alta si la
+        # identidad ya existe y la prueba debe poder repetirse.
+        username = "prueba-%d.test" % int(time.time())
         status, payload = self.call(
             token, "POST", "/api/v1/admin/identities",
             {"username": username, "roles": ["medico"], "require_mfa": True},
