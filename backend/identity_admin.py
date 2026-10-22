@@ -214,6 +214,15 @@ class IdentityAdminClient:
                 status=400,
                 code="IDENTITY_WEAK_PASSWORD",
             )
+        # Los roles se validan ANTES de crear nada: si la asignacion se
+        # rechazara despues, la cuenta quedaria creada y huerfana.
+        forbidden = sorted(set(roles) & PROTECTED_ROLES)
+        if forbidden:
+            raise IdentityAdminError(
+                "el rol %s no se puede conceder desde la aplicacion" % ", ".join(forbidden),
+                status=403,
+                code="IDENTITY_PROTECTED_ROLE",
+            )
         payload: Dict[str, Any] = {
             "username": username,
             "enabled": True,
