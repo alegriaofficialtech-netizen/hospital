@@ -1,114 +1,24 @@
-<div class="login-page">
-  <div class="login-layout">
-    <section class="brand-panel" aria-hidden="true">
-      <div class="brand-content">
-        <span class="brand-mark">
-          <mat-icon>local_hospital</mat-icon>
-        </span>
-        <h1 class="brand-title">SGSI-ZTA Hospital Lab</h1>
-        <p class="brand-subtitle">Plataforma clínica Zero Trust</p>
-
-        <ul class="brand-points">
-          <li>
-            <mat-icon>badge</mat-icon>
-            <span>
-              <strong>Acceso restringido a personal autorizado</strong>
-              <small>Protegemos la información clínica con controles de seguridad avanzados.</small>
-            </span>
-          </li>
-          <li>
-            <mat-icon>shield</mat-icon>
-            <span>
-              <strong>Autenticación OIDC con doble factor</strong>
-              <small>Un acceso seguro y auditable para tu labor diario.</small>
-            </span>
-          </li>
-          <li>
-            <mat-icon>history</mat-icon>
-            <span>
-              <strong>Registro de auditoría inmutable</strong>
-              <small>Trazabilidad completa de todas las operaciones.</small>
-            </span>
-          </li>
-        </ul>
-      </div>
-    </section>
-
-    <section class="login-panel">
-      <mat-card class="login-card" appearance="outlined">
-        <mat-card-content>
-          <h2 class="login-title">Iniciar sesión</h2>
-          <p class="login-lead">
-            Identifíquese con sus credenciales corporativas para acceder al laboratorio.
-          </p>
-
-          <button
-            mat-flat-button
-            color="primary"
-            type="button"
-            class="login-button"
-            [disabled]="loading()"
-            (click)="loginWithKeycloak()"
-          >
-            <mat-icon>{{ loading() ? 'hourglass_top' : 'login' }}</mat-icon>
-            {{ loading() ? 'Abriendo el acceso…' : 'Iniciar sesión' }}
-          </button>
-
-          @if (initError(); as message) {
-            <p class="login-error" role="alert">
-              <mat-icon>error_outline</mat-icon>
-              <span>{{ message }}</span>
-            </p>
-          }
-
-          @if (error(); as message) {
-            <p class="login-error" role="alert">
-              <mat-icon>error_outline</mat-icon>
-              <span>{{ message }}</span>
-            </p>
-          }
-
-          @if (isDemo) {
-            <details class="demo-block">
-              <summary>Accesos directos de demostración</summary>
-
-              <mat-form-field appearance="outline" class="full-width">
-                <mat-label>Usuario</mat-label>
-                <input
-                  matInput
-                  name="username"
-                  autocomplete="username"
-                  [(ngModel)]="username"
-                  placeholder="demo.reception"
-                />
-                <mat-icon matSuffix>person</mat-icon>
-              </mat-form-field>
-
-              <div class="role-grid">
-                @for (item of demoRoles; track item.role) {
-                  <button
-                    mat-stroked-button
-                    type="button"
-                    class="role-button"
-                    (click)="loginDemo(item.role)"
-                  >
-                    <mat-icon>{{ item.icon }}</mat-icon>
-                    <span class="role-copy">
-                      <strong>{{ item.label }}</strong>
-                      <small>{{ item.description }}</small>
-                    </span>
-                  </button>
-                }
-              </div>
-            </details>
-          } @else {
-            <p class="login-hint">
-              Entorno de evaluación con usuarios sintéticos. La validación clínica exige
-              doble factor.
-            </p>
-          }
-        </mat-card-content>
-      </mat-card>
-    </section>
-  </div>
-</div>
+<section class="handoff" aria-live="polite">
+  @if (state() === 'redirecting') {
+    <mat-spinner diameter="44" aria-hidden="true"></mat-spinner>
+    <h1 class="handoff-title">SGSI-ZTA &middot; Hospital Lab</h1>
+    <p class="handoff-text">Redirigiendo al acceso seguro&hellip;</p>
+  } @else if (state() === 'error') {
+    <h1 class="handoff-title">No se pudo abrir el acceso seguro</h1>
+    <p class="handoff-text">{{ errorMessage() }}</p>
+    <button mat-flat-button type="button" (click)="retry()">Reintentar</button>
+  } @else {
+    <h1 class="handoff-title">Perfil de demostracion</h1>
+    <p class="handoff-text">
+      Este perfil es solo de desarrollo y no usa credenciales reales. El acceso
+      del hospital se hace siempre en Keycloak.
+    </p>
+    <div class="handoff-actions">
+      @for (role of mockRoles; track role) {
+        <button mat-stroked-button type="button" (click)="enterMockRole(role)">
+          {{ roleLabels[role] }}
+        </button>
+      }
+    </div>
+  }
+</section>

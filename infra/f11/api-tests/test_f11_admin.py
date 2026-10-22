@@ -36,6 +36,21 @@ def load_setup_realm():
     return module
 
 
+
+def mfa_evidence(result):
+    """True si el token emitido acredita el segundo factor."""
+    claims = result.get("claims") or {}
+    amr = claims.get("amr") or []
+    if isinstance(amr, str):
+        amr = [amr]
+    acr = str(claims.get("acr", "")).lower()
+    return (
+        any(str(value).lower() == "otp" for value in amr)
+        or "otp" in acr
+        or "mfa" in acr
+    )
+
+
 class IdentityAdminSuite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -79,6 +94,19 @@ class IdentityAdminSuite(unittest.TestCase):
                     self.credentials["clientId"],
                     self.credentials["redirectUri"],
                 )
+        # Un codigo TOTP solo sirve una vez por ventana de 30 s. Si esa ventana
+        # ya se consumio, el token llega sin evidencia OTP y la operacion se
+        # deniega por MFA aunque la identidad sea la correcta. Se espera a la
+        # ventana siguiente y se reintenta una vez.
+        if secret and not mfa_evidence(result):
+            time.sleep(32)
+            flow = self.setup_realm.BrowserFlow(
+                KC_URL,
+                self.credentials["realm"],
+                self.credentials["clientId"],
+                self.credentials["redirectUri"],
+            )
+            result = flow.login(username, password or user["password"], secret)
         return result["access_token"]
 
     def call(self, token, method, path, body=None):

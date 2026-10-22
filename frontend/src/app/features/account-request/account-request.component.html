@@ -1,0 +1,87 @@
+<section class="request-page">
+  <mat-card class="request-card">
+    <mat-card-header>
+      <mat-card-title>Solicitar cuenta</mat-card-title>
+      <mat-card-subtitle>
+        Las cuentas del laboratorio las autoriza el administrador del sistema.
+      </mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content>
+      @if (confirmation()) {
+        <div class="request-ok" role="status">
+          <h2>Solicitud registrada</h2>
+          <p>
+            Su solicitud queda pendiente de autorizacion administrativa. No
+            podra acceder al laboratorio hasta que un administrador la apruebe
+            y cree su cuenta.
+          </p>
+          <p class="request-reference">Referencia: <strong>{{ confirmation() }}</strong></p>
+        </div>
+      } @else {
+        @if (errorMessage()) {
+          <p class="request-error" role="alert">{{ errorMessage() }}</p>
+        }
+
+        <form class="request-form" (ngSubmit)="submit()">
+          <mat-form-field appearance="outline">
+            <mat-label>Nombre completo</mat-label>
+            <input
+              matInput
+              name="fullName"
+              autocomplete="name"
+              required
+              [ngModel]="fullName()"
+              (ngModelChange)="fullName.set($event)"
+              [ngModelOptions]="{ standalone: true }"
+            />
+            @if (fieldErrors()['full_name']) {
+              <mat-error>{{ fieldErrors()['full_name'] }}</mat-error>
+            }
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Correo corporativo</mat-label>
+            <input
+              matInput
+              name="email"
+              type="email"
+              autocomplete="email"
+              required
+              [ngModel]="email()"
+              (ngModelChange)="email.set($event)"
+              [ngModelOptions]="{ standalone: true }"
+            />
+            @if (fieldErrors()['email']) {
+              <mat-error>{{ fieldErrors()['email'] }}</mat-error>
+            }
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Motivo de la solicitud</mat-label>
+            <textarea
+              matInput
+              name="justification"
+              rows="4"
+              required
+              [ngModel]="justification()"
+              (ngModelChange)="justification.set($event)"
+              [ngModelOptions]="{ standalone: true }"
+            ></textarea>
+            @if (fieldErrors()['justification']) {
+              <mat-error>{{ fieldErrors()['justification'] }}</mat-error>
+            }
+          </mat-form-field>
+
+          <button mat-flat-button type="submit" [disabled]="submitting()">
+            @if (submitting()) {
+              Enviando&hellip;
+            } @else {
+              Enviar solicitud
+            }
+          </button>
+        </form>
+      }
+    </mat-card-content>
+  </mat-card>
+</section>

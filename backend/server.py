@@ -200,6 +200,12 @@ AUDIT_LOGS = DatabaseBackedAuditLogs(db_manager)
 LAST_AUDIT_HASH = db_manager.get_last_audit_hash()
 LOCK = threading.Lock()
 
+# Account requests: public channel without authentication. The request grants
+# no access at all, so it is rate limited per origin to avoid a spam relay.
+IDENTITY_REQUEST_LIMIT = 5
+IDENTITY_REQUEST_WINDOW_SECONDS = 3600
+IDENTITY_REQUEST_HITS: Dict[str, List[float]] = {}
+
 
 def record_audit_event(
     action: str,
@@ -748,6 +754,91 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 "code": "INTERNAL_SERVER_ERROR"
             })
 
+    def _handle_identity_request(self, payload: Dict[str, Any], client_ip: str) -> None:
+        """Registra una solicitud de cuenta pendiente de autorizacion administrativa.
+
+        El canal es publico y no autentica a nadie: la solicitud no concede
+        ningun acceso. Queda en la cadena de auditoria para que un
+        administrador la revise y la materialice en Keycloak desde el modulo F1b.
+        """
+        full_name = str(payload.get("full_name", "")).strip()
+        email = str(payload.get("email", "")).strip().lower()
+        justification = str(payload.get("justification", "")).strip()
+
+        errors: Dict[str, str] = {}
+        if not 3 <= len(full_name) <= 120:
+            errors["full_name"] = "Indique el nombre completo (3 a 120 caracteres)."
+        if not (
+            5 <= len(email) <= 160
+            and "@" in email
+            and not email.startswith("@")
+            and not email.endswith("@")
+            and "." in email.split("@")[-1]
+        ):
+            errors["email"] = "Indique un correo corporativo valido."
+        if not 10 <= len(justification) <= 600:
+            errors["justification"] = "Explique el motivo de la solicitud (10 a 600 caracteres)."
+
+        if errors:
+            record_audit_event(
+                "IDENTITY_REQUEST",
+                "ANONYMOUS",
+                "NONE",
+                "REJECTED",
+                "Solicitud de cuenta con datos invalidos: " + ", ".join(sorted(errors)),
+                client_ip,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "La solicitud no tiene los datos minimos para tramitarla.",
+                "code": "INVALID_IDENTITY_REQUEST",
+                "fields": errors,
+            })
+            return
+
+        now = time.time()
+        with LOCK:
+            window = [
+                stamp
+                for stamp in IDENTITY_REQUEST_HITS.get(client_ip, [])
+                if now - stamp < IDENTITY_REQUEST_WINDOW_SECONDS
+            ]
+            limited = len(window) >= IDENTITY_REQUEST_LIMIT
+            if not limited:
+                window.append(now)
+            IDENTITY_REQUEST_HITS[client_ip] = window
+
+        if limited:
+            record_audit_event(
+                "IDENTITY_REQUEST",
+                "ANONYMOUS",
+                "NONE",
+                "RATE_LIMITED",
+                "Solicitud de cuenta rechazada por limite de solicitudes por origen",
+                client_ip,
+            )
+            self.send_json(429, {
+                "error": "TooManyRequests",
+                "message": "Se alcanzo el limite de solicitudes. Contacte con el administrador del sistema.",
+                "code": "IDENTITY_REQUEST_RATE_LIMITED",
+            })
+            return
+
+        request_id = "REQ-" + os.urandom(4).hex().upper()
+        record_audit_event(
+            "IDENTITY_REQUEST",
+            "ANONYMOUS",
+            "NONE",
+            "REQUESTED",
+            f"Solicitud {request_id} de {full_name} <{email}>: {justification[:200]}",
+            client_ip,
+        )
+        self.send_json(201, {
+            "request_id": request_id,
+            "status": "PENDING_ADMIN_AUTHORIZATION",
+            "message": "Su solicitud quedo registrada. Un administrador debe autorizarla antes de crear la cuenta.",
+        })
+
     def _do_POST_internal(self) -> None:
         parsed = urlparse(self.path)
         client_ip = self.client_address[0]
@@ -758,6 +849,12 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             payload = json.loads(body)
         except Exception:
             payload = {}
+
+        # Account request: recorded in the audit trail and granting no access.
+        # Authorization and identity creation belong to the administrator.
+        if parsed.path == "/api/v1/identity-requests":
+            self._handle_identity_request(payload, client_ip)
+            return
 
         # 1. Control de Autenticacion Local / Deprecacion con Fallback Restringido
         if parsed.path == "/api/v1/admin/identities":

@@ -1,0 +1,4 @@
+/* Hoja base minima del tema: el diseno del hospital define su propio layout. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body { background: #eef2f7; }

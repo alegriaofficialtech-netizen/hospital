@@ -98,3 +98,48 @@ La plataforma cubre los cuatro objetivos de la tesis:
   la auditoria.
 - El build solo se ejecuta con preflight favorable y monitor a 88 C.
 
+## Acceso unico en Keycloak (2026-10-22)
+
+### Objetivo
+Una sola experiencia visual de inicio de sesion: el formulario de credenciales
+vive en Keycloak con el diseno del hospital, y Angular deja de capturar
+credenciales.
+
+### Cambios
+- [x] Diseno del hospital volcado al tema de Keycloak
+      (`infra/f11/keycloak-theme/sgsi-zta/login/`): mismo CSS del usuario, iconos
+      en SVG en linea, imagen `frontend/public/lab-background.jpg` como recurso
+      del tema, textos nuevos en `messages_es.properties`.
+- [x] `login.component.*` de Angular convertido en traspaso: sin formulario, sin
+      `ngModel`, sin contrasena de ejemplo (`demo.reception` / `Clinica2026!`).
+- [x] `AuthService.homeRoute()`: cada rol entra en su panel
+      (recepcion -> admision, patologo -> medico, auditor -> auditoria,
+      administrador -> administracion, tecnico -> dashboard). El retorno OIDC
+      apunta a `/login` para que la decision de panel este en un solo sitio.
+- [x] Canal publico de solicitud de cuenta `POST /api/v1/identity-requests`:
+      valida, acota por origen (5/hora) y registra `IDENTITY_REQUEST` en la
+      cadena de auditoria. No concede acceso ni habilita autorregistro.
+- [x] Pantalla publica `/solicitud-cuenta` en Angular, enlazada desde el tema.
+- [x] Dockerfile del tema: una sola fuente de verdad (antes copiaba un
+      directorio duplicado y servia la version vieja del CSS).
+- [x] `client.baseUrl` definido (`http://localhost:4200/`) para el enlace de
+      solicitud, y `baseUrl`/`rootUrl` tambien en el bootstrap del realm.
+
+### Evidencia
+- Suite de API: **27/27** (`infra/f11/run-api-tests.sh`): 22 previas + 5 nuevas
+  (`test_f11_identity_request.py`).
+- Navegador real (Chrome headless via CDP, tunel del operador):
+  `/login` redirige al tema de Keycloak, login real de `recepcion.test` ->
+  `/admision`, 0 campos de contrasena en la aplicacion, envio real de solicitud
+  con referencia `REQ-...`, cierre de sesion que vuelve al formulario de
+  Keycloak sin bucle.
+- Capturas: `/home/elcra/sgsi-zta-runtime/f11/capturas/` (01 a 05).
+- Auditoria: 416 eventos, con `IDENTITY_REQUEST` en `REQUESTED`, `REJECTED` y
+  `RATE_LIMITED`.
+
+### Pendiente
+- `admin.test` sigue sin TOTP enrolled: no hay administrador independiente, por
+  lo que `sgsi-admin` permanece en `medico.test`.
+- F2 (diagnostico + inventario) sin iniciar: tablas `security_findings`,
+  `diagnostic_runs` y `assets`, 12 comprobadores ejecutables, O1/O2.
+

@@ -243,6 +243,8 @@ def create_client(
 ) -> str:
     client = {
         "clientId": client_id,
+        "baseUrl": "http://localhost:4200/",
+        "rootUrl": "http://localhost:4200/",
         "name": "SGSI-ZTA local clinical frontend",
         "description": "Local test public client with Authorization Code + PKCE S256",
         "enabled": True,

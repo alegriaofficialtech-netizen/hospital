@@ -5,6 +5,13 @@ import { ShellComponent } from './layout/shell.component';
 
 export const routes: Routes = [
   {
+    path: 'solicitud-cuenta',
+    loadComponent: () =>
+      import('./features/account-request/account-request.component').then(
+        (m) => m.AccountRequestComponent,
+      ),
+  },
+  {
     path: 'login',
     loadComponent: () => import('./features/login/login.component').then((m) => m.LoginComponent),
   },

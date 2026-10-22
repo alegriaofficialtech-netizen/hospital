@@ -1,100 +1,77 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { Router } from '@angular/router';
 import { AuthService } from '../../core/auth/auth.service';
-import { UserRole } from '../../core/models';
 import { environment } from '../../../environments/environment';
+import { ROLE_LABELS, UserRole } from '../../core/models';
 
-interface DemoRole {
-  role: UserRole;
-  label: string;
-  description: string;
-  icon: string;
-}
-
+/**
+ * This screen is no longer a login form.
+ *
+ * The credential form lives in the Keycloak theme, which reproduces the
+ * hospital design (two columns, laboratory image, "Iniciar sesion" and
+ * "Solicitar cuenta"). Here only the navigation is handed over: Angular never
+ * captures, transmits or stores passwords, and there is no second login screen.
+ */
 @Component({
   selector: 'app-login',
   standalone: true,
-  imports: [
-    FormsModule,
-    MatButtonModule,
-    MatCardModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
-  ],
+  imports: [MatButtonModule, MatProgressSpinnerModule],
   templateUrl: './login.component.html',
-  styleUrl: './login.component.scss',
+  styleUrls: ['./login.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class LoginComponent {
+export class LoginComponent implements OnInit {
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
 
-  username = 'demo.reception';
-  readonly error = signal<string | null>(null);
-  readonly loading = signal(false);
+  readonly state = signal<'redirecting' | 'error' | 'mock'>('redirecting');
+  readonly errorMessage = signal<string | null>(null);
 
-  /** Reason the OIDC client could not be initialised, if that happened. */
-  readonly initError = this.auth.keycloakInitError;
-
-  /** True only in the mock profile. The real build never shows the demo block. */
-  readonly isDemo = environment.useMockAuth;
-
-  readonly demoRoles: readonly DemoRole[] = [
-    {
-      role: 'ROLE_RECEPTION',
-      label: 'Recepción',
-      description: 'Crear órdenes sintéticas',
-      icon: 'assignment_ind',
-    },
-    {
-      role: 'ROLE_LAB_TECH',
-      label: 'Laboratorio',
-      description: 'Revisar muestras recogidas',
-      icon: 'science',
-    },
-    {
-      role: 'ROLE_PATHOLOGIST',
-      label: 'Patólogo',
-      description: 'Validar con MFA simulada',
-      icon: 'biotech',
-    },
-    {
-      role: 'ROLE_SECURITY_AUDITOR',
-      label: 'Auditor de seguridad',
-      description: 'Inspeccionar la cadena de auditoría',
-      icon: 'verified_user',
-    },
+  /** Only in the development profile without Keycloak. It never holds passwords. */
+  readonly isMockProfile = environment.useMockAuth;
+  readonly mockRoles: readonly UserRole[] = [
+    'ROLE_RECEPTION',
+    'ROLE_PATHOLOGIST',
+    'ROLE_SECURITY_AUDITOR',
+    'ROLE_PLATFORM_ADMIN',
   ];
+  readonly roleLabels = ROLE_LABELS;
 
-  loginDemo(role: UserRole): void {
-    this.error.set(null);
-    this.auth.loginDemo(role, this.username);
-    void this.router.navigate(['/dashboard']);
-  }
+  async ngOnInit(): Promise<void> {
+    await this.auth.initialize();
 
-  async loginWithKeycloak(): Promise<void> {
-    this.error.set(null);
-    this.loading.set(true);
+    if (this.auth.isAuthenticated()) {
+      await this.router.navigateByUrl(this.auth.homeRoute());
+      return;
+    }
+
+    if (this.isMockProfile) {
+      this.state.set('mock');
+      return;
+    }
+
     try {
+      // keycloak-js navigates to the issuer and processes the response in /login.
       await this.auth.loginWithKeycloak();
-      if (this.auth.isAuthenticated()) {
-        await this.router.navigate(['/dashboard']);
-      }
     } catch (error) {
-      this.error.set(
+      this.state.set('error');
+      this.errorMessage.set(
         error instanceof Error
           ? error.message
-          : 'No se pudo iniciar el acceso con Keycloak.',
+          : 'No se pudo abrir la ventana de acceso seguro.',
       );
-    } finally {
-      this.loading.set(false);
     }
+  }
+
+  retry(): void {
+    this.state.set('redirecting');
+    void this.ngOnInit();
+  }
+
+  async enterMockRole(role: UserRole): Promise<void> {
+    this.auth.loginDemo(role, '');
+    await this.router.navigateByUrl(this.auth.homeRoute());
   }
 }

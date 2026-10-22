@@ -149,7 +149,8 @@ export class AuthService {
     let navigationError: unknown = null;
     const navigation = this.keycloak
       .login({
-        redirectUri: `${window.location.origin}/dashboard`,
+        // The return goes to /login: there the panel is chosen by role.
+        redirectUri: `${window.location.origin}/login`,
       })
       .catch((error: unknown) => {
         navigationError = error;
@@ -200,6 +201,38 @@ export class AuthService {
         // The local session is already cleared; a failed remote logout must not block the UI.
       }
     }
+  }
+
+  /**
+   * Home panel of every worker.
+   *
+   * The route depends on the realm role: the platform administrator enters
+   * identity administration, the security auditor the audit trail, the
+   * pathologist their consultation, reception the admission desk and the
+   * laboratory technician the general dashboard.
+   */
+  homeRoute(): string {
+    const roles = this.roles();
+    const panels: Record<UserRole, string> = {
+      ROLE_PLATFORM_ADMIN: '/administracion',
+      ROLE_SECURITY_AUDITOR: '/auditoria',
+      ROLE_PATHOLOGIST: '/medico',
+      ROLE_RECEPTION: '/admision',
+      ROLE_LAB_TECH: '/dashboard',
+    };
+    const priority: readonly UserRole[] = [
+      'ROLE_PLATFORM_ADMIN',
+      'ROLE_SECURITY_AUDITOR',
+      'ROLE_PATHOLOGIST',
+      'ROLE_RECEPTION',
+      'ROLE_LAB_TECH',
+    ];
+    for (const role of priority) {
+      if (roles.includes(role)) {
+        return panels[role];
+      }
+    }
+    return '/dashboard';
   }
 
   hasAnyRole(required: readonly UserRole[]): boolean {
