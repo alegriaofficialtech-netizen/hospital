@@ -143,3 +143,65 @@ credenciales.
 - F2 (diagnostico + inventario) sin iniciar: tablas `security_findings`,
   `diagnostic_runs` y `assets`, 12 comprobadores ejecutables, O1/O2.
 
+## F2: M2 Diagnostico + M3 Inventario (2026-10-22)
+
+### Objetivo
+O1 (diagnostico de seguridad) y O2 (inventario de activos, base de la matriz de
+riesgos). La evidencia es la configuracion efectiva del laboratorio F11: cada
+hallazgo conserva el comando que lo produjo y su salida.
+
+### M2 Diagnostico de seguridad
+- [x] 12 comprobadores ejecutables (`backend/security_diagnostics.py`) sobre la
+      configuracion real: PKCE S256 del cliente, autorregistro y reset de
+      contrasena deshabilitados, MFA en las identidades con rol de plataforma,
+      rol protegido no concedible, login local delegado a Keycloak, MFA
+      obligatoria para administrar, cadena y checkpoint de auditoria, bundle
+      Angular sin campos de contrasena, endurecimiento de contenedores y
+      permisos 0600 de los ficheros de datos.
+- [x] Persistencia de `diagnostic_runs` y `security_findings` (migracion 3).
+- [x] Historial de ejecuciones, hallazgos con evidencia y resumen de indicadores.
+- [x] RBAC: `VIEW_DIAGNOSTICS` (auditor y plataforma) y `RUN_DIAGNOSTICS`
+      (plataforma **con MFA**, solo humano). Denegaciones reales comprobadas.
+- [x] Auditoria: `DIAGNOSTIC_RUN` en la cadena por hash.
+
+### M3 Inventario de activos
+- [x] Catalogo de los 11 componentes reales del laboratorio, con clasificacion
+      (`container`, `service`, `dataset`, `identity_store`, `code`,
+      `configuration`), criticidad, responsable (rol, nunca una persona), origen
+      (`compose`, `runtime`, `manual`), version y marca de sintetico.
+- [x] Persistencia de `assets` y `asset_evaluations` (migracion 3).
+- [x] Alta, actualizacion con `revision` incremental y **historial de
+      evaluaciones** por activo.
+- [x] RBAC: `VIEW_ASSETS` para cualquier identidad autenticada y
+      `MANAGE_ASSETS` para la plataforma **con MFA**.
+- [x] Auditoria: `ASSET_CREATE`, `ASSET_UPDATE` y `ASSET_EVALUATE`.
+
+### Hallazgos reales sobre el propio laboratorio (O1)
+El diagnostico no es decorativo: sobre la configuracion viva del F11 produce
+cuatro hallazgos abiertos, entre ellos dos que son整改 pendientes y dos que son
+fixtures deliberados de la propia suite:
+- `KC_MFA_ON_ADMIN_IDENTITIES` (failed): `medico.sinmfa` y `admin.sinmfa.test`
+  tienen el rol `sgsi-admin` **sin credencial OTP**. Son las identidades que la
+  suite usa para demostrar la denegacion por MFA; el hallazgo es real y explica
+  por que la puerta de administracion exige MFA.
+- `CONTAINER_HARDENING` (failed): el servicio `keycloak` del compose no declara
+  `cap_drop: ALL` (el de `frontend` si lo cumple).
+
+### Evidencia
+- Suite de API: **45/45** (27 previas + 18 de F2), `infra/f11/run-api-tests.sh`.
+- Navegador real (Chrome headless por CDP): `/diagnostico` ejecuta los
+  comprobadores con el administrador con MFA y muestra 24 hallazgos con su
+  comando y su salida; `/inventario` lista 13 activos con sus indicadores y su
+  historial; el auditor ve los hallazgos pero no puede ejecutar ni dar de alta.
+- Correccion de un fallo previo discovered durante la verificacion: el frontend
+  no mapeaba `sgsi-admin` a `ROLE_PLATFORM_ADMIN`, de modo que
+  `/administracion` era inalcanzable en la aplicacion.
+
+### Pendiente
+- `admin.test` sigue sin TOTP enrolled y **sin ningun rol del realm**: cuando se
+  enrolle hay que asignarle `sgsi-admin` y `mfa-required`, verificar el acceso
+  real a `/administracion`, y solo despues retirar `sgsi-admin` de `medico.test`
+  conservando su rol medico.
+- F3 (M4 Matriz de riesgos + M5 Controles) puede apoyarse en los hallazgos y el
+  inventario ya reales.
+
