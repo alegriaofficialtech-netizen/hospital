@@ -23,12 +23,38 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ZERO_HASH = "0" * 64
+
+# Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
+# La evidencia real es solo la del entorno F11: el resto no genera hallazgos.
+F11_ENVIRONMENT = "f11-local"
+
+# Vocabulario cerrado del inventario de activos (M3). La capa de persistencia
+# lo impone: un activo con una clasificacion, criticidad u origen fuera de
+# estas listas no se escribe.
+ASSET_CLASSIFICATIONS = ("container", "service", "dataset", "identity_store", "code", "configuration")
+ASSET_CRITICALITIES = ("critical", "high", "medium", "low")
+ASSET_SOURCES = ("compose", "runtime", "manual")
 
 
 class DatabaseError(Exception):
     """Excepción base para errores de base de datos."""
+    pass
+
+
+class AssetValidationError(DatabaseError):
+    """El activo no cumple el vocabulario cerrado de clasificacion, criticidad u origen."""
+    pass
+
+
+class AssetAlreadyExistsError(DatabaseError):
+    """Ya existe un activo registrado con el mismo nombre."""
+    pass
+
+
+class AssetNotFoundError(DatabaseError):
+    """El activo solicitado no existe en el inventario."""
     pass
 
 
@@ -305,6 +331,84 @@ class ClinicalDatabaseManager:
                     """)
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_iomt_nonces_received ON iomt_nonces(received_at);")
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (2, datetime('now'));")
+
+                if current_ver < 3:
+                    # Migración 3: M2 Diagnóstico de seguridad y M3 Inventario de activos
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS diagnostic_runs (
+                            id TEXT PRIMARY KEY,
+                            started_at REAL NOT NULL,
+                            finished_at REAL,
+                            status TEXT NOT NULL,
+                            checker_count INTEGER NOT NULL,
+                            passed INTEGER NOT NULL,
+                            failed INTEGER NOT NULL,
+                            warnings INTEGER NOT NULL,
+                            triggered_by TEXT NOT NULL,
+                            environment TEXT NOT NULL,
+                            notes TEXT
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_diagnostic_runs_started ON diagnostic_runs(started_at DESC);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_diagnostic_runs_environment ON diagnostic_runs(environment);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS security_findings (
+                            id TEXT PRIMARY KEY,
+                            run_id TEXT NOT NULL,
+                            checker_id TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            objective TEXT NOT NULL,
+                            severity TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            asset_ref TEXT,
+                            evidence_command TEXT NOT NULL,
+                            evidence_output TEXT NOT NULL,
+                            remediation TEXT NOT NULL,
+                            detected_at REAL NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_security_findings_run ON security_findings(run_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_security_findings_checker ON security_findings(checker_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_security_findings_status ON security_findings(status);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_security_findings_severity ON security_findings(severity);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS assets (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL UNIQUE,
+                            classification TEXT NOT NULL,
+                            criticality TEXT NOT NULL,
+                            owner TEXT NOT NULL,
+                            source TEXT NOT NULL,
+                            version TEXT,
+                            environment TEXT NOT NULL,
+                            synthetic INTEGER NOT NULL,
+                            description TEXT NOT NULL,
+                            created_at REAL NOT NULL,
+                            updated_at REAL NOT NULL,
+                            revision INTEGER NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_assets_classification ON assets(classification);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_assets_criticality ON assets(criticality);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_assets_source ON assets(source);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_assets_environment ON assets(environment);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS asset_evaluations (
+                            id TEXT PRIMARY KEY,
+                            asset_id TEXT NOT NULL,
+                            evaluated_at REAL NOT NULL,
+                            evaluated_by TEXT NOT NULL,
+                            criticality TEXT NOT NULL,
+                            notes TEXT NOT NULL,
+                            findings_count INTEGER NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_asset_evaluations_asset ON asset_evaluations(asset_id);")
+
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (3, datetime('now'));")
 
                 cur.execute("COMMIT;")
             except Exception as e:
@@ -736,6 +840,473 @@ class ClinicalDatabaseManager:
             raise IomtReplayError(
                 f"Nonce '{nonce}' ya utilizado por el dispositivo '{device_id}'."
             ) from exc
+
+    # --------------------------------------------------------------------------
+    # M2 DIAGNÓSTICO DE SEGURIDAD (ejecuciones, hallazgos) E M3 INVENTARIO DE ACTIVOS
+    # --------------------------------------------------------------------------
+    def _insert_diagnostic_run_cursor(self, cur: sqlite3.Cursor, run: Dict[str, Any]) -> Dict[str, Any]:
+        """Inserta una ejecución de diagnóstico en una transacción ya abierta."""
+        run_id = str(run.get("id") or "").strip()
+        if not run_id:
+            raise DatabaseError("El identificador de la ejecucion de diagnostico es obligatorio.")
+        started_at = float(run.get("started_at") or time.time())
+        finished_at = run.get("finished_at")
+        cur.execute("""
+            INSERT INTO diagnostic_runs (
+                id, started_at, finished_at, status, checker_count, passed, failed,
+                warnings, triggered_by, environment, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (
+            run_id,
+            started_at,
+            float(finished_at) if finished_at is not None else None,
+            str(run.get("status") or "completed"),
+            int(run.get("checker_count") or 0),
+            int(run.get("passed") or 0),
+            int(run.get("failed") or 0),
+            int(run.get("warnings") or 0),
+            str(run.get("triggered_by") or "unknown"),
+            str(run.get("environment") or F11_ENVIRONMENT),
+            run.get("notes"),
+        ))
+        return self._fetch_diagnostic_run_cursor(cur, run_id)
+
+    def _fetch_diagnostic_run_cursor(self, cur: sqlite3.Cursor, run_id: str) -> Optional[Dict[str, Any]]:
+        """Lee una ejecución de diagnóstico por su identificador."""
+        cur.execute("SELECT * FROM diagnostic_runs WHERE id = ?;", (run_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def _insert_security_finding_cursor(self, cur: sqlite3.Cursor, finding: Dict[str, Any]) -> Dict[str, Any]:
+        """Inserta un hallazgo de seguridad en una transacción ya abierta."""
+        finding_id = str(finding.get("id") or "").strip()
+        if not finding_id:
+            raise DatabaseError("El identificador del hallazgo de seguridad es obligatorio.")
+        run_id = str(finding.get("run_id") or "").strip()
+        if not run_id:
+            raise DatabaseError("Todo hallazgo de seguridad debe pertenecer a una ejecucion (run_id).")
+        status = str(finding.get("status") or "").strip()
+        if status not in ("passed", "failed", "warning"):
+            raise DatabaseError(
+                "El estado del hallazgo debe ser passed, failed o warning; se recibio '%s'." % status
+            )
+        severity = str(finding.get("severity") or "").strip()
+        if severity not in ("critical", "high", "medium", "low"):
+            raise DatabaseError(
+                "La severidad del hallazgo debe ser critical, high, medium o low; se recibio '%s'." % severity
+            )
+        objective = str(finding.get("objective") or "").strip()
+        if objective not in ("O1", "O2"):
+            raise DatabaseError(
+                "El objetivo del hallazgo debe ser O1 u O2; se recibio '%s'." % objective
+            )
+        cur.execute("""
+            INSERT INTO security_findings (
+                id, run_id, checker_id, title, objective, severity, status, asset_ref,
+                evidence_command, evidence_output, remediation, detected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (
+            finding_id,
+            run_id,
+            str(finding.get("checker_id") or ""),
+            str(finding.get("title") or ""),
+            objective,
+            severity,
+            status,
+            finding.get("asset_ref"),
+            str(finding.get("evidence_command") or ""),
+            str(finding.get("evidence_output") or ""),
+            str(finding.get("remediation") or ""),
+            float(finding.get("detected_at") or time.time()),
+        ))
+        cur.execute("SELECT * FROM security_findings WHERE id = ?;", (finding_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else {"id": finding_id}
+
+    def insert_diagnostic_run(self, run: Dict[str, Any]) -> Dict[str, Any]:
+        """Persiste una ejecución de diagnóstico y devuelve el registro almacenado."""
+        return self._run_simple_write(
+            lambda cur: self._insert_diagnostic_run_cursor(cur, run)
+        )
+
+    def insert_security_findings(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Persiste una lista de hallazgos en una única transacción atómica."""
+        def operation(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            return [self._insert_security_finding_cursor(cur, finding) for finding in findings]
+        return self._run_simple_write(operation)
+
+    def insert_diagnostic_run_with_findings(
+        self,
+        run: Dict[str, Any],
+        findings: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Guarda la ejecución y sus hallazgos en una sola transacción: o se escriben ambos, o ninguno."""
+        def operation(cur: sqlite3.Cursor) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+            stored_run = self._insert_diagnostic_run_cursor(cur, run)
+            stored = [self._insert_security_finding_cursor(cur, finding) for finding in findings]
+            return stored_run, stored
+        return self._run_simple_write(operation)
+
+    def list_diagnostic_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Lista las ejecuciones de diagnóstico más recientes."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute(
+                    "SELECT * FROM diagnostic_runs ORDER BY started_at DESC LIMIT ?;",
+                    (max(1, int(limit)),),
+                )
+                rows = cur.fetchall()
+                cur.close()
+                return [dict(row) for row in rows]
+            except Exception as e:
+                raise DatabaseError(f"Error al listar ejecuciones de diagnostico en {self.db_path}: {e}")
+
+    def get_diagnostic_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """Recupera una ejecución de diagnóstico por su identificador."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute("SELECT * FROM diagnostic_runs WHERE id = ?;", (run_id,))
+                row = cur.fetchone()
+                cur.close()
+                return dict(row) if row is not None else None
+            except Exception as e:
+                raise DatabaseError(f"Error al leer la ejecucion de diagnostico '{run_id}': {e}")
+
+    def count_diagnostic_runs(self) -> int:
+        """Cuenta las ejecuciones de diagnóstico registradas."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute("SELECT count(*) FROM diagnostic_runs;")
+                total = int(cur.fetchone()[0])
+                cur.close()
+                return total
+            except Exception as e:
+                raise DatabaseError(f"Error al contar las ejecuciones de diagnostico: {e}")
+
+    def list_security_findings(
+        self,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        objective: Optional[str] = None,
+        checker_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        asset_ref: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Lista hallazgos de seguridad con filtros opcionales sobre la evidencia real."""
+        clauses: List[str] = []
+        params: List[Any] = []
+        for column, value in (
+            ("status", status),
+            ("severity", severity),
+            ("objective", objective),
+            ("checker_id", checker_id),
+            ("run_id", run_id),
+            ("asset_ref", asset_ref),
+        ):
+            if value:
+                clauses.append("f.%s = ?" % column)
+                params.append(str(value))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, int(limit)))
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute(
+                    "SELECT f.*, r.environment AS environment FROM security_findings f "
+                    "LEFT JOIN diagnostic_runs r ON r.id = f.run_id"
+                    + where
+                    + " ORDER BY f.detected_at DESC LIMIT ?;",
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+                cur.close()
+                return [dict(row) for row in rows]
+            except Exception as e:
+                raise DatabaseError(f"Error al listar hallazgos de seguridad en {self.db_path}: {e}")
+
+    def _count_findings_by(self, column: str) -> Dict[str, int]:
+        """Cuenta los hallazgos agrupados por una columna de la tabla de hallazgos."""
+        if column not in ("status", "severity", "objective", "checker_id"):
+            raise DatabaseError("Columna de agrupacion no permitida para el recuento de hallazgos: %s" % column)
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute(
+                    "SELECT %s AS bucket, count(*) FROM security_findings GROUP BY %s ORDER BY %s;"
+                    % (column, column, column)
+                )
+                rows = cur.fetchall()
+                cur.close()
+                return {str(row["bucket"]): int(row[1]) for row in rows}
+            except Exception as e:
+                raise DatabaseError(f"Error al contar hallazgos por {column} en {self.db_path}: {e}")
+
+    def count_findings_by_status(self) -> Dict[str, int]:
+        """Cuenta los hallazgos por estado (passed, failed, warning)."""
+        return self._count_findings_by("status")
+
+    def count_findings_by_severity(self) -> Dict[str, int]:
+        """Cuenta los hallazgos por severidad (critical, high, medium, low)."""
+        return self._count_findings_by("severity")
+
+    def count_findings_by_objective(self) -> Dict[str, int]:
+        """Cuenta los hallazgos por objetivo de tesis (O1, O2)."""
+        return self._count_findings_by("objective")
+
+    def _validate_asset_fields(self, asset: Dict[str, Any]) -> None:
+        """Exige el vocabulario cerrado de clasificacion, criticidad y origen."""
+        classification = str(asset.get("classification") or "").strip()
+        if classification not in ASSET_CLASSIFICATIONS:
+            raise AssetValidationError(
+                "Clasificacion de activo no admitida: '%s'. Valores validos: %s."
+                % (classification, ", ".join(ASSET_CLASSIFICATIONS))
+            )
+        criticality = str(asset.get("criticality") or "").strip()
+        if criticality not in ASSET_CRITICALITIES:
+            raise AssetValidationError(
+                "Criticidad de activo no admitida: '%s'. Valores validos: %s."
+                % (criticality, ", ".join(ASSET_CRITICALITIES))
+            )
+        source = str(asset.get("source") or "").strip()
+        if source not in ASSET_SOURCES:
+            raise AssetValidationError(
+                "Origen de activo no admitido: '%s'. Valores validos: %s."
+                % (source, ", ".join(ASSET_SOURCES))
+            )
+
+    def _insert_asset_cursor(self, cur: sqlite3.Cursor, asset: Dict[str, Any]) -> Dict[str, Any]:
+        """Inserta un activo del inventario en una transacción ya abierta."""
+        asset_id = str(asset.get("id") or "").strip()
+        if not asset_id:
+            raise DatabaseError("El identificador del activo es obligatorio.")
+        name = str(asset.get("name") or "").strip()
+        if not name:
+            raise AssetValidationError("El nombre del activo es obligatorio.")
+        self._validate_asset_fields(asset)
+        now = time.time()
+        cur.execute(
+            "SELECT id FROM assets WHERE name = ?;",
+            (name,),
+        )
+        if cur.fetchone() is not None:
+            raise AssetAlreadyExistsError("Ya existe un activo registrado con el nombre '%s'." % name)
+        try:
+            cur.execute("""
+                INSERT INTO assets (
+                    id, name, classification, criticality, owner, source, version,
+                    environment, synthetic, description, created_at, updated_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                asset_id,
+                name,
+                str(asset["classification"]).strip(),
+                str(asset["criticality"]).strip(),
+                str(asset.get("owner") or "").strip(),
+                str(asset["source"]).strip(),
+                asset.get("version"),
+                str(asset.get("environment") or F11_ENVIRONMENT),
+                1 if int(asset.get("synthetic") or 0) else 0,
+                str(asset.get("description") or "").strip(),
+                float(asset.get("created_at") or now),
+                float(asset.get("updated_at") or now),
+                int(asset.get("revision") or 1),
+            ))
+        except sqlite3.IntegrityError as exc:
+            raise AssetAlreadyExistsError(
+                "Ya existe un activo registrado con el nombre '%s'." % name
+            ) from exc
+        cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else {"id": asset_id}
+
+    def insert_asset(self, asset: Dict[str, Any]) -> Dict[str, Any]:
+        """Alta de un activo en el inventario, con validacion del vocabulario cerrado."""
+        return self._run_simple_write(lambda cur: self._insert_asset_cursor(cur, asset))
+
+    def update_asset(self, asset_id: str, changes: Dict[str, Any]) -> Dict[str, Any]:
+        """Actualiza los campos modificables de un activo e incrementa su revision."""
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
+            row = cur.fetchone()
+            if row is None:
+                raise AssetNotFoundError("El activo '%s' no existe en el inventario." % asset_id)
+            current = dict(row)
+            merged = dict(current)
+            for field in (
+                "name", "classification", "criticality", "owner", "source",
+                "version", "environment", "synthetic", "description",
+            ):
+                if field in changes and changes[field] is not None:
+                    merged[field] = changes[field]
+            merged["synthetic"] = 1 if int(merged.get("synthetic") or 0) else 0
+            self._validate_asset_fields(merged)
+            merged["revision"] = int(current.get("revision") or 1) + 1
+            merged["updated_at"] = time.time()
+            if merged["name"] != current["name"]:
+                cur.execute("SELECT id FROM assets WHERE name = ?;", (merged["name"],))
+                if cur.fetchone() is not None:
+                    raise AssetAlreadyExistsError(
+                        "Ya existe un activo registrado con el nombre '%s'." % merged["name"]
+                    )
+            try:
+                cur.execute("""
+                    UPDATE assets SET
+                        name = ?, classification = ?, criticality = ?, owner = ?, source = ?,
+                        version = ?, environment = ?, synthetic = ?, description = ?,
+                        updated_at = ?, revision = ?
+                    WHERE id = ?;
+                """, (
+                    merged["name"],
+                    merged["classification"],
+                    merged["criticality"],
+                    merged["owner"],
+                    merged["source"],
+                    merged.get("version"),
+                    merged["environment"],
+                    merged["synthetic"],
+                    merged["description"],
+                    merged["updated_at"],
+                    merged["revision"],
+                    asset_id,
+                ))
+            except sqlite3.IntegrityError as exc:
+                raise AssetAlreadyExistsError(
+                    "Ya existe un activo registrado con el nombre '%s'." % merged["name"]
+                ) from exc
+            cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
+            updated = cur.fetchone()
+            return dict(updated) if updated is not None else merged
+        return self._run_simple_write(operation)
+
+    def get_asset(self, asset_id: str) -> Optional[Dict[str, Any]]:
+        """Recupera un activo del inventario por su identificador."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
+                row = cur.fetchone()
+                cur.close()
+                return dict(row) if row is not None else None
+            except Exception as e:
+                raise DatabaseError(f"Error al leer el activo '{asset_id}': {e}")
+
+    def list_assets(
+        self,
+        classification: Optional[str] = None,
+        criticality: Optional[str] = None,
+        source: Optional[str] = None,
+        environment: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Lista los activos del inventario con filtros opcionales."""
+        clauses: List[str] = []
+        params: List[Any] = []
+        for column, value in (
+            ("classification", classification),
+            ("criticality", criticality),
+            ("source", source),
+            ("environment", environment),
+        ):
+            if value:
+                clauses.append("%s = ?" % column)
+                params.append(str(value))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        query = "SELECT * FROM assets" + where + " ORDER BY name ASC;"
+        if limit:
+            query = "SELECT * FROM assets" + where + " ORDER BY name ASC LIMIT ?;"
+            params.append(max(1, int(limit)))
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall()
+                cur.close()
+                return [dict(row) for row in rows]
+            except Exception as e:
+                raise DatabaseError(f"Error al listar activos en {self.db_path}: {e}")
+
+    def insert_asset_evaluation(self, evaluation: Dict[str, Any]) -> Dict[str, Any]:
+        """Registra la evaluacion de criticidad de un activo."""
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            evaluation_id = str(evaluation.get("id") or "").strip()
+            if not evaluation_id:
+                raise DatabaseError("El identificador de la evaluacion es obligatorio.")
+            asset_id = str(evaluation.get("asset_id") or "").strip()
+            if not asset_id:
+                raise DatabaseError("La evaluacion debe referenciar un activo (asset_id).")
+            criticality = str(evaluation.get("criticality") or "").strip()
+            if criticality not in ASSET_CRITICALITIES:
+                raise AssetValidationError(
+                    "Criticidad de evaluacion no admitida: '%s'. Valores validos: %s."
+                    % (criticality, ", ".join(ASSET_CRITICALITIES))
+                )
+            cur.execute("SELECT id FROM assets WHERE id = ?;", (asset_id,))
+            if cur.fetchone() is None:
+                raise AssetNotFoundError("El activo '%s' no existe en el inventario." % asset_id)
+            cur.execute("""
+                INSERT INTO asset_evaluations (
+                    id, asset_id, evaluated_at, evaluated_by, criticality, notes, findings_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+            """, (
+                evaluation_id,
+                asset_id,
+                float(evaluation.get("evaluated_at") or time.time()),
+                str(evaluation.get("evaluated_by") or "unknown"),
+                criticality,
+                str(evaluation.get("notes") or ""),
+                int(evaluation.get("findings_count") or 0),
+            ))
+            cur.execute("SELECT * FROM asset_evaluations WHERE id = ?;", (evaluation_id,))
+            row = cur.fetchone()
+            return dict(row) if row is not None else {"id": evaluation_id}
+        return self._run_simple_write(operation)
+
+    def list_asset_evaluations(self, asset_id: str) -> List[Dict[str, Any]]:
+        """Lista las evaluaciones registradas para un activo."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute(
+                    "SELECT * FROM asset_evaluations WHERE asset_id = ? ORDER BY evaluated_at DESC;",
+                    (asset_id,),
+                )
+                rows = cur.fetchall()
+                cur.close()
+                return [dict(row) for row in rows]
+            except Exception as e:
+                raise DatabaseError(f"Error al listar evaluaciones del activo '{asset_id}': {e}")
+
+    def asset_summary(self) -> Dict[str, Any]:
+        """Resume el inventario: totales por clasificacion, criticidad y origen."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute("SELECT count(*) FROM assets;")
+                total = int(cur.fetchone()[0])
+                summary: Dict[str, Any] = {
+                    "total": total,
+                    "by_classification": {},
+                    "by_criticality": {},
+                    "by_source": {},
+                }
+                for key, column in (
+                    ("by_classification", "classification"),
+                    ("by_criticality", "criticality"),
+                    ("by_source", "source"),
+                ):
+                    cur.execute(
+                        "SELECT %s AS bucket, count(*) FROM assets GROUP BY %s ORDER BY %s;"
+                        % (column, column, column)
+                    )
+                    summary[key] = {str(row[0]): int(row[1]) for row in cur.fetchall()}
+                cur.close()
+                return summary
+            except Exception as e:
+                raise DatabaseError(f"Error al resumir el inventario de activos: {e}")
 
     # --------------------------------------------------------------------------
     # COMPATIBILIDAD: GUARDADO LEGADO

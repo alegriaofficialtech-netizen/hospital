@@ -132,7 +132,7 @@ CLINICAL_ACTIONS = frozenset({"CREATE_ORDER", "VALIDATE_ORDER", "VIEW_ORDERS"})
 
 # Acciones que solo puede ejecutar una persona con MFA acreditada. Una cuenta
 # de servicio queda excluida igual que en las acciones clinicas.
-HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES"})
+HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS"})
 
 CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "CREATE_ORDER": {
@@ -159,6 +159,32 @@ CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
         "required_roles": {"ROLE_PLATFORM_ADMIN"},
         "require_mfa": True,
         "description": "Administracion de identidades sinteticas de la plataforma",
+    },
+    "VIEW_DIAGNOSTICS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": "Consulta de comprobadores, ejecuciones y hallazgos de diagnostico de seguridad",
+    },
+    "RUN_DIAGNOSTICS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,  # Operacion sensible: dispara comprobadores sobre la configuracion real
+        "description": "Ejecucion de comprobadores de diagnostico de seguridad del entorno F11",
+    },
+    "VIEW_ASSETS": {
+        "required_roles": {
+            "ROLE_RECEPTION",
+            "ROLE_LAB_TECH",
+            "ROLE_PATHOLOGIST",
+            "ROLE_SECURITY_AUDITOR",
+            "ROLE_PLATFORM_ADMIN",
+        },
+        "require_mfa": False,
+        "description": "Consulta del inventario de activos de la plataforma",
+    },
+    "MANAGE_ASSETS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,  # Operacion sensible: modifica el inventario que sostiene la evidencia
+        "description": "Alta, actualizacion y evaluacion de activos del inventario",
     },
 }
 

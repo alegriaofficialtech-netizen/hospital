@@ -20,7 +20,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 # Asegurar resolucion del modulo de validacion JWT y base de datos
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,13 +36,28 @@ from identity_admin import (
     validate_username,
 )
 from database import (
+    AssetAlreadyExistsError,
+    AssetNotFoundError,
+    AssetValidationError,
     ClinicalDatabaseManager,
     DatabaseBackedAuditLogs,
     DatabaseBackedOrdersDict,
     DatabaseError,
     DuplicateOrderError,
+    F11_ENVIRONMENT,
     IomtReplayError,
     OrderVersionConflictError,
+)
+from asset_inventory import (
+    classifications,
+    criticalities,
+    seed_catalog,
+    validate_asset,
+)
+from security_diagnostics import (
+    CheckResult,
+    checker_catalog,
+    run_checks,
 )
 from clinical_domain import (
     ORDER_ANALYZED,
@@ -158,6 +173,18 @@ def get_identity_admin() -> IdentityAdminClient:
 DB_PATH = os.environ.get("LIS_DB_PATH", os.path.join(CURRENT_DIR, "data", "lis.db"))
 db_manager = ClinicalDatabaseManager(db_path=DB_PATH)
 
+# M3 Inventario: el catalogo semilla de activos del laboratorio F11 se inserta
+# de forma idempotente en el arranque. Un activo ya existente no se duplica ni
+# se sobrescribe: su correccion se hace por la API, que queda auditada.
+try:
+    SEED_RESULT = seed_catalog(db_manager)
+    print(
+        "[*] Inventario F11: %d activos creados, %d ya existentes"
+        % (len(SEED_RESULT.get("created", [])), len(SEED_RESULT.get("skipped", [])))
+    )
+except Exception as e:
+    print("[WARN] No se pudo sembrar el inventario de activos: %s" % e)
+
 # Clave del sello de integridad clínico. Override explícito solo para pruebas.
 CLINICAL_SEAL_KEY: Optional[bytes] = None
 
@@ -230,6 +257,15 @@ def record_audit_event(
         )
         LAST_AUDIT_HASH = record["hash"]
         return record
+
+
+def _fields_from_errors(errors: List[str]) -> Dict[str, str]:
+    """Convierte una lista de errores 'campo: mensaje' en el mapa fields de la respuesta 400."""
+    fields: Dict[str, str] = {}
+    for error in errors:
+        field, _, message = str(error).partition(": ")
+        fields[field.strip() or "payload"] = message.strip() or str(error)
+    return fields
 
 
 def verify_audit_chain(events: List[Dict[str, Any]]) -> bool:
@@ -520,6 +556,45 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # 4. Diagnostico de Seguridad (M2): comprobadores, ejecuciones y hallazgos
+        if parsed.path == "/api/v1/diagnostics/checkers":
+            self._handle_diagnostics_checkers_get(client_ip)
+            return
+
+        if parsed.path == "/api/v1/diagnostics/summary":
+            self._handle_diagnostics_summary_get(client_ip)
+            return
+
+        if parsed.path == "/api/v1/diagnostics/findings":
+            self._handle_diagnostics_findings_get(parsed.query, client_ip)
+            return
+
+        if parsed.path == "/api/v1/diagnostics/runs":
+            self._handle_diagnostics_runs_get(parsed.query, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/diagnostics/runs/"):
+            run_id = parsed.path[len("/api/v1/diagnostics/runs/"):].strip("/")
+            if run_id:
+                self._handle_diagnostic_run_get(run_id, client_ip)
+                return
+
+        # 5. Inventario de Activos (M3). La ruta de resumen se resuelve ANTES
+        #    que la de un activo concreto: /api/v1/assets/summary no es un id.
+        if parsed.path == "/api/v1/assets":
+            self._handle_assets_get(parsed.query, client_ip)
+            return
+
+        if parsed.path == "/api/v1/assets/summary":
+            self._handle_assets_summary_get(client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/assets/"):
+            asset_id = parsed.path[len("/api/v1/assets/"):].strip("/")
+            if asset_id:
+                self._handle_asset_get(asset_id, client_ip)
+                return
+
         self.send_json(404, {"error": "NotFound", "message": "Ruta no encontrada"})
 
     # ------------------------------------------------- administracion de identidades
@@ -738,6 +813,619 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             ),
         })
 
+    def _authorize_policy(
+        self,
+        action: str,
+        audit_action: str,
+        client_ip: str,
+        forbidden_message: str,
+        forbidden_code: str,
+    ):
+        """Autentica y autoriza una accion del PEP.
+
+        Devuelve (contexto, None) cuando la operacion esta permitida y
+        (None, (codigo, cuerpo)) cuando debe rechazarse. El rechazo por rol y
+        el rechazo por MFA se distinguen, igual que en la administracion de
+        identidades.
+        """
+        context, err = self.extract_and_validate_auth()
+        if err:
+            status_code, err_body = err
+            record_audit_event(
+                audit_action, "ANONYMOUS", "NONE", f"DENIED_{status_code}",
+                err_body["message"], client_ip,
+            )
+            return None, (status_code, err_body)
+        try:
+            enforce_clinical_action(context, action)
+        except InsufficientPermissionsError:
+            record_audit_event(
+                audit_action, context.username, str(list(context.roles)), "DENIED_FORBIDDEN",
+                forbidden_message, client_ip, context.mfa_verified,
+            )
+            return None, (403, {
+                "error": "Forbidden",
+                "message": forbidden_message,
+                "code": forbidden_code,
+            })
+        except MFARequiredError:
+            record_audit_event(
+                audit_action, context.username, str(list(context.roles)), "DENIED_MFA_REQUIRED",
+                "Intento de operacion sensible sin MFA acreditada",
+                client_ip, context.mfa_verified,
+            )
+            return None, (403, {
+                "error": "Forbidden",
+                "message": "La operacion exige autenticacion multifactor (MFA) acreditada",
+                "code": "MFA_AUTHENTICATION_REQUIRED",
+            })
+        return context, None
+
+    def _handle_diagnostics_checkers_get(self, client_ip: str) -> None:
+        """Catalogo de comprobadores ejecutables del diagnostico de seguridad."""
+        context, failure = self._authorize_policy(
+            "VIEW_DIAGNOSTICS", "LIST_DIAGNOSTIC_CHECKERS", client_ip,
+            "Acceso al diagnostico de seguridad restringido al auditor de seguridad "
+            "y al administrador de plataforma",
+            "DIAGNOSTICS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        record_audit_event(
+            "LIST_DIAGNOSTIC_CHECKERS", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta del catalogo de %d comprobadores de diagnostico" % len(checker_catalog()),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "checkers": checker_catalog(),
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_diagnostics_runs_get(self, query: str, client_ip: str) -> None:
+        """Ejecuciones de diagnostico mas recientes."""
+        context, failure = self._authorize_policy(
+            "VIEW_DIAGNOSTICS", "LIST_DIAGNOSTIC_RUNS", client_ip,
+            "Acceso al diagnostico de seguridad restringido al auditor de seguridad "
+            "y al administrador de plataforma",
+            "DIAGNOSTICS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        try:
+            limit = max(1, min(500, int((params.get("limit") or ["20"])[0])))
+        except (TypeError, ValueError):
+            limit = 20
+        runs = db_manager.list_diagnostic_runs(limit=limit)
+        record_audit_event(
+            "LIST_DIAGNOSTIC_RUNS", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta de %d ejecuciones de diagnostico" % len(runs),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"runs": runs, "environment": F11_ENVIRONMENT})
+
+    def _handle_diagnostic_run_get(self, run_id: str, client_ip: str) -> None:
+        """Detalle de una ejecucion de diagnostico con sus hallazgos."""
+        context, failure = self._authorize_policy(
+            "VIEW_DIAGNOSTICS", "GET_DIAGNOSTIC_RUN", client_ip,
+            "Acceso al diagnostico de seguridad restringido al auditor de seguridad "
+            "y al administrador de plataforma",
+            "DIAGNOSTICS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        run = db_manager.get_diagnostic_run(run_id)
+        if run is None:
+            record_audit_event(
+                "GET_DIAGNOSTIC_RUN", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                "Ejecucion de diagnostico no encontrada: %s" % run_id, client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": "La ejecucion de diagnostico '%s' no existe" % run_id,
+                "code": "DIAGNOSTIC_RUN_NOT_FOUND",
+            })
+            return
+        findings = db_manager.list_security_findings(run_id=run_id, limit=1000)
+        record_audit_event(
+            "GET_DIAGNOSTIC_RUN", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta de la ejecucion %s con %d hallazgos" % (run_id, len(findings)),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "run": run,
+            "findings": findings,
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_diagnostics_findings_get(self, query: str, client_ip: str) -> None:
+        """Hallazgos de diagnostico con filtros opcionales."""
+        context, failure = self._authorize_policy(
+            "VIEW_DIAGNOSTICS", "LIST_DIAGNOSTIC_FINDINGS", client_ip,
+            "Acceso al diagnostico de seguridad restringido al auditor de seguridad "
+            "y al administrador de plataforma",
+            "DIAGNOSTICS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        try:
+            limit = max(1, min(1000, int((params.get("limit") or ["100"])[0])))
+        except (TypeError, ValueError):
+            limit = 100
+        findings = db_manager.list_security_findings(
+            status=(params.get("status") or [None])[0],
+            severity=(params.get("severity") or [None])[0],
+            objective=(params.get("objective") or [None])[0],
+            checker_id=(params.get("checker_id") or [None])[0],
+            run_id=(params.get("run_id") or [None])[0],
+            limit=limit,
+        )
+        record_audit_event(
+            "LIST_DIAGNOSTIC_FINDINGS", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta de %d hallazgos de diagnostico" % len(findings),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "findings": findings,
+            "total": len(findings),
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_diagnostics_summary_get(self, client_ip: str) -> None:
+        """Resumen del diagnostico: totales por estado, severidad, objetivo y comprobador."""
+        context, failure = self._authorize_policy(
+            "VIEW_DIAGNOSTICS", "GET_DIAGNOSTIC_SUMMARY", client_ip,
+            "Acceso al diagnostico de seguridad restringido al auditor de seguridad "
+            "y al administrador de plataforma",
+            "DIAGNOSTICS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        by_status = db_manager.count_findings_by_status()
+        by_severity = db_manager.count_findings_by_severity()
+        by_objective = db_manager.count_findings_by_objective()
+        runs = db_manager.list_diagnostic_runs(limit=1)
+        last_run = runs[0] if runs else None
+        catalog = {entry["id"]: entry for entry in checker_catalog()}
+        latest: Dict[str, Dict[str, Any]] = {}
+        for finding in db_manager.list_security_findings(limit=1000):
+            checker_id = str(finding.get("checker_id") or "")
+            if not checker_id or checker_id in latest:
+                continue
+            latest[checker_id] = {
+                "checker_id": checker_id,
+                "title": catalog.get(checker_id, {}).get("title") or finding.get("title"),
+                "status": finding.get("status"),
+                "objective": finding.get("objective"),
+            }
+        total_findings = sum(by_status.values())
+        record_audit_event(
+            "GET_DIAGNOSTIC_SUMMARY", context.username, str(list(context.roles)), "ALLOWED",
+            "Resumen del diagnostico: %d hallazgos" % total_findings,
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "total_findings": total_findings,
+            "open_findings": total_findings - int(by_status.get("passed", 0)),
+            "by_status": by_status,
+            "by_severity": by_severity,
+            "by_objective": by_objective,
+            "by_checker": [latest[checker_id] for checker_id in sorted(latest)],
+            "runs_total": db_manager.count_diagnostic_runs(),
+            "last_run": last_run,
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_assets_get(self, query: str, client_ip: str) -> None:
+        """Inventario de activos con filtros opcionales y su resumen."""
+        context, failure = self._authorize_policy(
+            "VIEW_ASSETS", "LIST_ASSETS", client_ip,
+            "Acceso al inventario de activos restringido a los roles autorizados",
+            "ASSETS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        assets = db_manager.list_assets(
+            classification=(params.get("classification") or [None])[0],
+            criticality=(params.get("criticality") or [None])[0],
+            source=(params.get("source") or [None])[0],
+            environment=(params.get("environment") or [None])[0],
+        )
+        summary = db_manager.asset_summary()
+        record_audit_event(
+            "LIST_ASSETS", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta de %d activos del inventario" % len(assets),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "assets": assets,
+            "summary": summary,
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_assets_summary_get(self, client_ip: str) -> None:
+        """Resumen del inventario sin el detalle de los activos."""
+        context, failure = self._authorize_policy(
+            "VIEW_ASSETS", "GET_ASSET_SUMMARY", client_ip,
+            "Acceso al inventario de activos restringido a los roles autorizados",
+            "ASSETS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        summary = db_manager.asset_summary()
+        record_audit_event(
+            "GET_ASSET_SUMMARY", context.username, str(list(context.roles)), "ALLOWED",
+            "Resumen del inventario: %d activos" % int(summary.get("total", 0)),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"summary": summary, "environment": F11_ENVIRONMENT})
+
+    def _handle_asset_get(self, asset_id: str, client_ip: str) -> None:
+        """Detalle de un activo con sus evaluaciones."""
+        context, failure = self._authorize_policy(
+            "VIEW_ASSETS", "GET_ASSET", client_ip,
+            "Acceso al inventario de activos restringido a los roles autorizados",
+            "ASSETS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        asset = db_manager.get_asset(asset_id)
+        if asset is None:
+            record_audit_event(
+                "GET_ASSET", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                "Activo no encontrado en el inventario: %s" % asset_id,
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": "El activo '%s' no existe en el inventario" % asset_id,
+                "code": "ASSET_NOT_FOUND",
+            })
+            return
+        evaluations = db_manager.list_asset_evaluations(asset_id)
+        record_audit_event(
+            "GET_ASSET", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta del activo %s con %d evaluaciones" % (asset_id, len(evaluations)),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "asset": asset,
+            "evaluations": evaluations,
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_diagnostic_run_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        """Ejecuta los comprobadores de verdad y persiste la ejecucion con sus hallazgos."""
+        context, failure = self._authorize_policy(
+            "RUN_DIAGNOSTICS", "DIAGNOSTIC_RUN", client_ip,
+            "La ejecucion del diagnostico de seguridad esta reservada al administrador "
+            "de plataforma",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        requested = payload.get("checker_ids")
+        checker_ids: Optional[List[str]] = None
+        if requested is not None:
+            if not isinstance(requested, list) or not all(
+                isinstance(item, str) for item in requested
+            ):
+                self.send_json(400, {
+                    "error": "BadRequest",
+                    "message": "checker_ids debe ser una lista de identificadores de comprobador",
+                    "code": "DIAGNOSTIC_CHECKER_IDS_INVALID",
+                    "fields": {"checker_ids": "se espera una lista de cadenas"},
+                })
+                return
+            known = {entry["id"] for entry in checker_catalog()}
+            unknown = [item for item in requested if item not in known]
+            if unknown:
+                self.send_json(400, {
+                    "error": "BadRequest",
+                    "message": "Hay comprobadores desconocidos en la peticion",
+                    "code": "DIAGNOSTIC_CHECKER_UNKNOWN",
+                    "fields": {
+                        "checker_ids": "comprobadores desconocidos: %s" % ", ".join(sorted(unknown))
+                    },
+                })
+                return
+            checker_ids = list(dict.fromkeys(requested))
+
+        started_at = time.time()
+        results: List[CheckResult] = run_checks(checker_ids)
+        finished_at = time.time()
+
+        by_status: Dict[str, int] = {"passed": 0, "failed": 0, "warning": 0}
+        by_severity: Dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        run_id = "RUN-" + os.urandom(4).hex().upper()
+        findings: List[Dict[str, Any]] = []
+        for result in results:
+            by_status[result.status] = by_status.get(result.status, 0) + 1
+            by_severity[result.severity] = by_severity.get(result.severity, 0) + 1
+            findings.append({
+                "id": "FND-" + os.urandom(4).hex().upper(),
+                "run_id": run_id,
+                "checker_id": result.checker_id,
+                "title": result.title,
+                "objective": result.objective,
+                "severity": result.severity,
+                "status": result.status,
+                "asset_ref": result.asset_ref,
+                "evidence_command": result.evidence_command,
+                "evidence_output": result.evidence_output,
+                "remediation": result.remediation,
+                "detected_at": finished_at,
+            })
+
+        run = {
+            "id": run_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "status": "completed",
+            "checker_count": len(results),
+            "passed": by_status.get("passed", 0),
+            "failed": by_status.get("failed", 0),
+            "warnings": by_status.get("warning", 0),
+            "triggered_by": context.username,
+            "environment": F11_ENVIRONMENT,
+            "notes": "Ejecucion de %d comprobadores sobre el entorno %s" % (
+                len(results), F11_ENVIRONMENT,
+            ),
+        }
+        stored_run, stored_findings = db_manager.insert_diagnostic_run_with_findings(run, findings)
+        record_audit_event(
+            "DIAGNOSTIC_RUN", context.username, str(list(context.roles)), "ALLOWED",
+            "Ejecucion %s: %d comprobadores, hallazgos por severidad: critical=%d high=%d "
+            "medium=%d low=%d" % (
+                run_id, len(results),
+                by_severity.get("critical", 0), by_severity.get("high", 0),
+                by_severity.get("medium", 0), by_severity.get("low", 0),
+            ),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(201, {
+            "run": stored_run,
+            "findings": stored_findings,
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_asset_create_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        """Alta de un activo en el inventario."""
+        context, failure = self._authorize_policy(
+            "MANAGE_ASSETS", "ASSET_CREATE", client_ip,
+            "La gestion del inventario de activos esta reservada al administrador de plataforma",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        errors = validate_asset(payload)
+        if errors:
+            record_audit_event(
+                "ASSET_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de activo con datos invalidos: %s" % ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "El activo no tiene los datos minimos para registrarse",
+                "code": "ASSET_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+        asset_id = "AST-" + os.urandom(4).hex().upper()
+        record = {
+            "id": asset_id,
+            "name": str(payload.get("name")).strip(),
+            "classification": str(payload.get("classification")).strip(),
+            "criticality": str(payload.get("criticality")).strip(),
+            "owner": str(payload.get("owner")).strip(),
+            "source": str(payload.get("source")).strip(),
+            "version": payload.get("version"),
+            "environment": str(payload.get("environment") or F11_ENVIRONMENT).strip(),
+            "synthetic": 1 if payload.get("synthetic", 1) else 0,
+            "description": str(payload.get("description")).strip(),
+            "revision": 1,
+        }
+        try:
+            asset = db_manager.insert_asset(record)
+        except AssetAlreadyExistsError as exc:
+            record_audit_event(
+                "ASSET_CREATE", context.username, str(list(context.roles)), "DENIED_DUPLICATE",
+                str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(409, {
+                "error": "Conflict",
+                "message": str(exc),
+                "code": "ASSET_ALREADY_EXISTS",
+            })
+            return
+        except AssetValidationError as exc:
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": str(exc),
+                "code": "ASSET_INVALID",
+            })
+            return
+        record_audit_event(
+            "ASSET_CREATE", context.username, str(list(context.roles)), "ALLOWED",
+            "Activo %s (%s, %s, origen %s) dado de alta" % (
+                asset["name"], asset["classification"], asset["criticality"], asset["source"],
+            ),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(201, {"asset": asset, "environment": F11_ENVIRONMENT})
+
+    def _handle_asset_update_post(
+        self, asset_id: str, payload: Dict[str, Any], client_ip: str,
+    ) -> None:
+        """Actualizacion parcial de un activo: la revision se incrementa."""
+        context, failure = self._authorize_policy(
+            "MANAGE_ASSETS", "ASSET_UPDATE", client_ip,
+            "La gestion del inventario de activos esta reservada al administrador de plataforma",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        updatable = (
+            "name", "classification", "criticality", "owner", "source",
+            "version", "environment", "synthetic", "description",
+        )
+        changes = {key: payload[key] for key in updatable if key in payload}
+        if not changes:
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Indica al menos un campo a actualizar",
+                "code": "ASSET_NO_CHANGE",
+                "fields": {"payload": "no se ha indicado ningun campo modificable"},
+            })
+            return
+        errors = validate_asset(changes, partial=True)
+        if errors:
+            record_audit_event(
+                "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Actualizacion de activo con datos invalidos: %s" % ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "La actualizacion no tiene los datos minimos",
+                "code": "ASSET_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+        try:
+            asset = db_manager.update_asset(asset_id, changes)
+        except AssetNotFoundError as exc:
+            record_audit_event(
+                "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                str(exc)[:200], client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": str(exc),
+                "code": "ASSET_NOT_FOUND",
+            })
+            return
+        except AssetAlreadyExistsError as exc:
+            self.send_json(409, {
+                "error": "Conflict",
+                "message": str(exc),
+                "code": "ASSET_ALREADY_EXISTS",
+            })
+            return
+        except AssetValidationError as exc:
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": str(exc),
+                "code": "ASSET_INVALID",
+            })
+            return
+        record_audit_event(
+            "ASSET_UPDATE", context.username, str(list(context.roles)), "ALLOWED",
+            "Activo %s actualizado a la revision %s" % (asset["name"], asset["revision"]),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"asset": asset, "environment": F11_ENVIRONMENT})
+
+    def _handle_asset_evaluation_post(
+        self, asset_id: str, payload: Dict[str, Any], client_ip: str,
+    ) -> None:
+        """Registra la evaluacion de criticidad de un activo."""
+        context, failure = self._authorize_policy(
+            "MANAGE_ASSETS", "ASSET_EVALUATE", client_ip,
+            "La gestion del inventario de activos esta reservada al administrador de plataforma",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        errors: List[str] = []
+        criticality = str(payload.get("criticality") or "").strip()
+        if criticality not in criticalities():
+            errors.append(
+                "criticality: la criticidad debe ser una de: %s" % ", ".join(criticalities())
+            )
+        notes = str(payload.get("notes") or "").strip()
+        if not notes:
+            errors.append("notes: las notas de la evaluacion son obligatorias")
+        elif len(notes) > 600:
+            errors.append("notes: las notas no pueden superar los 600 caracteres")
+        if errors:
+            record_audit_event(
+                "ASSET_EVALUATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Evaluacion de activo con datos invalidos: %s" % ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "La evaluacion no tiene los datos minimos para registrarse",
+                "code": "ASSET_EVALUATION_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+        asset = db_manager.get_asset(asset_id)
+        if asset is None:
+            record_audit_event(
+                "ASSET_EVALUATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                "Activo no encontrado en el inventario: %s" % asset_id,
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": "El activo '%s' no existe en el inventario" % asset_id,
+                "code": "ASSET_NOT_FOUND",
+            })
+            return
+        findings_count = len(
+            db_manager.list_security_findings(asset_ref=str(asset.get("name")), limit=1000)
+        )
+        evaluation = {
+            "id": "EVA-" + os.urandom(4).hex().upper(),
+            "asset_id": asset_id,
+            "evaluated_at": time.time(),
+            "evaluated_by": context.username,
+            "criticality": criticality,
+            "notes": notes,
+            "findings_count": findings_count,
+        }
+        try:
+            stored = db_manager.insert_asset_evaluation(evaluation)
+        except AssetNotFoundError as exc:
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": str(exc),
+                "code": "ASSET_NOT_FOUND",
+            })
+            return
+        except AssetValidationError as exc:
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": str(exc),
+                "code": "ASSET_EVALUATION_INVALID",
+            })
+            return
+        record_audit_event(
+            "ASSET_EVALUATE", context.username, str(list(context.roles)), "ALLOWED",
+            "Evaluacion del activo %s: criticidad %s, %d hallazgos asociados"
+            % (asset_id, criticality, findings_count),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(201, {"evaluation": stored, "environment": F11_ENVIRONMENT})
+
     def do_POST(self) -> None:
         try:
             self._do_POST_internal()
@@ -869,6 +1557,28 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 2 and parts[1] == "password":
                 self._handle_admin_identity_password(parts[0], client_ip)
+                return
+
+        # 1.b Diagnostico de Seguridad (M2): ejecucion de comprobadores reales
+        if parsed.path == "/api/v1/diagnostics/runs":
+            self._handle_diagnostic_run_post(payload, client_ip)
+            return
+
+        # 1.c Inventario de Activos (M3): alta, actualizacion y evaluacion.
+        # El handler es http.server puro: solo hay do_GET y do_POST, asi que la
+        # actualizacion de un activo va por POST a /api/v1/assets/{id}.
+        if parsed.path == "/api/v1/assets":
+            self._handle_asset_create_post(payload, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/assets/"):
+            remainder = parsed.path[len("/api/v1/assets/"):]
+            parts = [segment for segment in remainder.split("/") if segment]
+            if len(parts) == 2 and parts[1] == "evaluations":
+                self._handle_asset_evaluation_post(parts[0], payload, client_ip)
+                return
+            if len(parts) == 1:
+                self._handle_asset_update_post(parts[0], payload, client_ip)
                 return
 
         if parsed.path == "/api/v1/auth/login":
