@@ -97,3 +97,4 @@ La plataforma cubre los cuatro objetivos de la tesis:
 - Ninguna credencial se devuelve al navegador mas de una vez y nunca entra en
   la auditoria.
 - El build solo se ejecuta con preflight favorable y monitor a 88 C.
+
