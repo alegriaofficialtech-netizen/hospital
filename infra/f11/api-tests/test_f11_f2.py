@@ -22,8 +22,11 @@ contra Keycloak y responde al desafio TOTP.
 """
 
 import hashlib
+import copy
 import json
 import os
+import sys
+import tempfile
 import time
 import unittest
 import urllib.error
@@ -51,9 +54,33 @@ ASSET_CRITICALITIES = ("critical", "high", "medium", "low")
 ASSET_SOURCES = ("compose", "runtime", "manual")
 
 # Marca inequivoca del activo que crea la suite: no se borra, se deja
-# identificado como dato de prueba sintetico del laboratorio.
+# identificado como dato de prueba sintetico del laboratorio. Cada caso usa un
+# nombre fijo con este prefijo para que la suite sea idempotente.
 TEST_ASSET_OWNER = "prueba-automatica"
-TEST_ASSET_PREFIX = "prueba-f2-"
+
+# Catalogo semilla del inventario (backend/asset_inventory.py SEED_CATALOG).
+# Los nombres son parte del contrato de F2: la suite comprueba que la siembra
+# del arranque no duplica ninguno de ellos.
+SEED_ASSET_NAMES = (
+    "keycloak-iam",
+    "keycloak-realm-hospital-lab",
+    "oidc-client-clinical-poc",
+    "keycloak-theme-hospital-lab",
+    "backend-api",
+    "frontend-caddy",
+    "frontend-angular-bundle",
+    "clinical-sqlite-db",
+    "audit-chain",
+    "compose-f11",
+    "api-test-suite",
+)
+
+# Accion de auditoria con la que la siembra del inventario queda auditada.
+SEED_AUDIT_ACTION = "ASSET_SEED"
+
+# Acciones sensibles que el backend declara con require_mfa y que ademas estan
+# en HUMAN_ONLY_ACTIONS (backend/jwt_validator.py).
+SENSITIVE_ACTIONS = ("MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS")
 
 # Cache de tokens compartida por las dos clases de esta suite. Un codigo TOTP
 # solo sirve una vez por ventana de 30 s: cachear evita gastar ventanas, y la
@@ -223,6 +250,25 @@ class F2ApiSuite(unittest.TestCase):
     def post(self, path, body, token=None, timeout=30):
         return self.call(token, "POST", path, body, timeout=timeout)
 
+    def post_raw(self, token, path, raw, timeout=30):
+        """Envia un cuerpo tal cual, sin serializarlo: permite probar JSON roto."""
+        data = raw.encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        request = urllib.request.Request(
+            BACKEND_URL + path, data=data, headers=headers, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status, json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            raw_body = exc.read()
+            try:
+                return exc.code, json.loads(raw_body or b"{}")
+            except json.JSONDecodeError:
+                return exc.code, {"raw": raw_body.decode("utf-8", "replace")}
+
     def audit_payload(self):
         """Lee la cadena de auditoria con el Oficial de Seguridad."""
         status, payload = self.call(
@@ -233,6 +279,57 @@ class F2ApiSuite(unittest.TestCase):
 
     def audit_events(self):
         return events_of(self.audit_payload())
+
+    # ------------------------------------------------------------------ activos
+    # Un unico cuerpo base y helpers de alta idempotente: la suite reutiliza un
+    # nombre fijo por caso, de modo que una segunda ejecucion actualiza el
+    # activo vigente en lugar de acumular filas nuevas en el inventario.
+
+    ASSET_BODY = {
+        "classification": "service",
+        "criticality": "medium",
+        "owner": TEST_ASSET_OWNER,
+        "source": "manual",
+        "version": "f2-suite",
+        "description": "Activo sintetico del laboratorio f11-local creado por la suite de F2.",
+        "synthetic": 1,
+    }
+
+    def _asset_body(self, name, **overrides):
+        body = dict(self.ASSET_BODY)
+        body["name"] = name
+        body.update(overrides)
+        return body
+
+    def _asset_by_name(self, token, name):
+        status, payload = self.get("/api/v1/assets", token)
+        self.assertEqual(200, status, payload)
+        for asset in payload.get("assets") or []:
+            if asset.get("name") == name:
+                return asset
+        self.fail("el activo de prueba %s no aparece en el inventario" % name)
+
+    def _post_asset(self, token, name, **overrides):
+        """Da de alta el activo de prueba y devuelve (asset, payload, creado).
+
+        Si el nombre ya existe (la suite se repite) no se falla: se actualiza
+        el activo existente y se sigue, para que el caso sea repetible.
+        """
+        body = self._asset_body(name, **overrides)
+        status, payload = self.post("/api/v1/assets", body, token)
+        if status == 409:
+            self.assertEqual("ASSET_ALREADY_EXISTS", payload.get("code"), payload)
+            existing = self._asset_by_name(token, name)
+            status, payload = self.post("/api/v1/assets/%s" % existing["id"], body, token)
+            self.assertEqual(200, status, payload)
+            return payload["asset"], payload, False
+        self.assertEqual(201, status, payload)
+        return payload["asset"], payload, True
+
+    def _ensure_asset_named(self, token, name, **overrides):
+        """Alta idempotente por nombre fijo: crea o actualiza, nunca duplica."""
+        asset, _payload, _created = self._post_asset(token, name, **overrides)
+        return asset
 
 
 class F2DiagnosticsApiSuite(F2ApiSuite):
@@ -476,56 +573,13 @@ class F2InventoryApiSuite(F2ApiSuite):
     # Activo de prueba compartido por los casos de escritura.
     asset = None
 
-    ASSET_BODY = {
-        "classification": "service",
-        "criticality": "medium",
-        "owner": TEST_ASSET_OWNER,
-        "source": "manual",
-        "version": "f2-suite",
-        "description": "Activo sintetico del laboratorio f11-local creado por la suite de F2.",
-        "synthetic": 1,
-    }
-
     # ------------------------------------------------------------------ helpers
-
-    def _asset_body(self, name, **overrides):
-        body = dict(self.ASSET_BODY)
-        body["name"] = name
-        body.update(overrides)
-        return body
-
-    def _asset_by_name(self, token, name):
-        status, payload = self.get("/api/v1/assets", token)
-        self.assertEqual(200, status, payload)
-        for asset in payload.get("assets") or []:
-            if asset.get("name") == name:
-                return asset
-        self.fail("el activo de prueba %s no aparece en el inventario" % name)
-
-    def _post_asset(self, token, name, **overrides):
-        """Da de alta el activo de prueba y devuelve (asset, payload, creado).
-
-        Si el nombre ya existe (la suite se repite) no se falla: se actualiza
-        el activo existente y se sigue, para que el caso sea repetible.
-        """
-        body = self._asset_body(name, **overrides)
-        status, payload = self.post("/api/v1/assets", body, token)
-        if status == 409:
-            self.assertEqual("ASSET_ALREADY_EXISTS", payload.get("code"), payload)
-            existing = self._asset_by_name(token, name)
-            status, payload = self.post("/api/v1/assets/%s" % existing["id"], body, token)
-            self.assertEqual(200, status, payload)
-            return payload["asset"], payload, False
-        self.assertEqual(201, status, payload)
-        return payload["asset"], payload, True
 
     def _ensure_asset(self, token):
         """Devuelve el activo de prueba, creandolo si todavia no existe."""
         asset = type(self).asset
         if asset is None:
-            asset, _, _ = self._post_asset(
-                token, "%sactivo-%d" % (TEST_ASSET_PREFIX, int(time.time())),
-            )
+            asset = self._ensure_asset_named(token, "prueba-f2-activo")
             type(self).asset = asset
             return asset
         status, payload = self.get("/api/v1/assets/%s" % asset["id"], token)
@@ -620,7 +674,7 @@ class F2InventoryApiSuite(F2ApiSuite):
     def test_11_auditor_cannot_create_an_asset(self):
         """El Oficial de Seguridad no puede dar de alta activos en el inventario."""
         token = self.token("auditor.test")
-        name = "%sauditor-%d" % (TEST_ASSET_PREFIX, int(time.time()))
+        name = "prueba-f2-rechazo-auditor"
         status, payload = self.post("/api/v1/assets", self._asset_body(name), token)
         self.assertEqual(403, status, payload)
         self.assertIn(
@@ -643,7 +697,7 @@ class F2InventoryApiSuite(F2ApiSuite):
     def test_12_admin_without_mfa_cannot_create_an_asset(self):
         """El administrador con rol pero sin OTP recibe 403 por MFA al dar de alta."""
         token = self.token("medico.sinmfa", totp_secret=None)
-        name = "%ssinmfa-%d" % (TEST_ASSET_PREFIX, int(time.time()))
+        name = "prueba-f2-rechazo-sinmfa"
         status, payload = self.post("/api/v1/assets", self._asset_body(name), token)
         self.assertEqual(403, status, payload)
         self.assertEqual("MFA_AUTHENTICATION_REQUIRED", payload.get("code"))
@@ -656,7 +710,7 @@ class F2InventoryApiSuite(F2ApiSuite):
     def test_13_admin_with_mfa_creates_a_synthetic_asset(self):
         """El administrador con MFA da de alta un activo sintetico del laboratorio."""
         token = self.token("medico.test")
-        name = "%sactivo-%d" % (TEST_ASSET_PREFIX, int(time.time()))
+        name = "prueba-f2-alta"
 
         asset, payload, created = self._post_asset(token, name)
         if created:
@@ -681,11 +735,12 @@ class F2InventoryApiSuite(F2ApiSuite):
     def test_14_duplicate_asset_is_rejected(self):
         """Un activo duplicado se rechaza con conflicto y no duplica la fila."""
         token = self.token("medico.test")
-        name = "%sduplicado-%d" % (TEST_ASSET_PREFIX, int(time.time()))
+        name = "prueba-f2-duplicado"
 
-        status, payload = self.post("/api/v1/assets", self._asset_body(name), token)
-        self.assertEqual(201, status, payload)
-        first_id = payload["asset"]["id"]
+        # Alta idempotente: si ya existe de una ejecucion anterior se actualiza,
+        # de modo que el caso no acumula filas nuevas.
+        first, _payload, _created = self._post_asset(token, name)
+        first_id = first["id"]
 
         status, payload = self.post("/api/v1/assets", self._asset_body(name), token)
         self.assertEqual(409, status, payload)
@@ -702,7 +757,7 @@ class F2InventoryApiSuite(F2ApiSuite):
     def test_15_invalid_asset_is_rejected_with_the_field_map(self):
         """Un activo con datos fuera del vocabulario se rechaza campo a campo."""
         token = self.token("medico.test")
-        name = "%sinvalido-%d" % (TEST_ASSET_PREFIX, int(time.time()))
+        name = "prueba-f2-invalido"
 
         status, payload = self.post(
             "/api/v1/assets",
@@ -839,6 +894,513 @@ class F2InventoryApiSuite(F2ApiSuite):
                 action, actions,
                 "la accion %s de F2 no queda en la cadena de auditoria" % action,
             )
+
+
+class F2CorrectionsApiSuite(F2ApiSuite):
+    """Correcciones de la revision independiente del trabajo F2.
+
+    Cada caso fija una correccion concreta: la siembra auditada, la seleccion
+    de comprobadores, los rechazos con evento en la cadena, el comprobador de
+    MFA, el cuerpo JSON que no es un objeto y la validacion del nombre en la
+    capa de persistencia.
+    """
+
+    # ------------------------------------------------------------------ helpers
+
+    def _new_events(self, before):
+        """Devuelve los eventos de auditoria anadidos despues de la lectura inicial."""
+        return self.audit_events()[len(before):]
+
+    def _database_module(self):
+        """Importa backend/database.py del repositorio (sin efectos al importar)."""
+        backend_dir = str(ROOT / "backend")
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        import database
+        return database
+
+    # ------------------------------------------------------------------ casos
+
+    def test_19_seed_is_audited_and_does_not_duplicate_assets(self):
+        """La siembra del inventario queda auditada una sola vez y no duplica activos."""
+        events = self.audit_events()
+        seeds = [event for event in events if event.get("action") == SEED_AUDIT_ACTION]
+        self.assertEqual(
+            1, len(seeds),
+            "la siembra del inventario debe quedar auditada una sola vez, no %d veces"
+            % len(seeds),
+        )
+        seed = seeds[0]
+        self.assertEqual("SYSTEM", seed.get("actor"), seed)
+        self.assertEqual("ALLOWED", seed.get("status"), seed)
+        self.assertIn("activos", str(seed.get("details") or ""), seed)
+
+        status, payload = self.get("/api/v1/assets", self.token("auditor.test"))
+        self.assertEqual(200, status, payload)
+        assets = payload.get("assets") or []
+        for name in SEED_ASSET_NAMES:
+            matching = [asset for asset in assets if asset.get("name") == name]
+            self.assertEqual(
+                1, len(matching),
+                "el activo sembrado %s aparece %d veces en el inventario"
+                % (name, len(matching)),
+            )
+
+    def test_20_checker_ids_selects_exactly_what_was_requested(self):
+        """checker_ids vacio no ejecuta nada, uno ejecuta solo ese y null el catalogo."""
+        token = self.token("medico.test")
+
+        status, catalog_payload = self.get(
+            "/api/v1/diagnostics/checkers", self.token("auditor.test"),
+        )
+        self.assertEqual(200, status, catalog_payload)
+        catalog_ids = [checker["id"] for checker in catalog_payload.get("checkers") or []]
+        self.assertTrue(catalog_ids, "el catalogo de comprobadores viene vacio")
+
+        # Una lista vacia significa "ningun comprobador", no "el catalogo".
+        status, payload = self.post(
+            "/api/v1/diagnostics/runs", {"checker_ids": []}, token, timeout=120,
+        )
+        self.assertEqual(201, status, payload)
+        self.assertEqual(0, (payload.get("run") or {}).get("checker_count"), payload)
+        self.assertEqual([], payload.get("findings"), payload)
+
+        # Una lista con un solo identificador ejecuta solo ese comprobador.
+        only = catalog_ids[0]
+        status, payload = self.post(
+            "/api/v1/diagnostics/runs", {"checker_ids": [only]}, token, timeout=120,
+        )
+        self.assertEqual(201, status, payload)
+        self.assertEqual(1, (payload.get("run") or {}).get("checker_count"), payload)
+        self.assertEqual(
+            [only],
+            [finding.get("checker_id") for finding in payload.get("findings") or []],
+            payload,
+        )
+
+        # null significa "el catalogo completo".
+        status, payload = self.post(
+            "/api/v1/diagnostics/runs", {"checker_ids": None}, token, timeout=300,
+        )
+        self.assertEqual(201, status, payload)
+        self.assertEqual(
+            len(catalog_ids), (payload.get("run") or {}).get("checker_count"), payload,
+        )
+        self.assertEqual(
+            sorted(catalog_ids),
+            sorted(finding.get("checker_id") for finding in payload.get("findings") or []),
+            payload,
+        )
+
+    def test_21_validation_and_duplicate_rejections_are_audited(self):
+        """Un rechazo por validacion y un rechazo por duplicado dejan evento."""
+        token = self.token("medico.test")
+        name = "prueba-f2-auditado"
+
+        before = self.audit_events()
+        status, payload = self.post(
+            "/api/v1/assets",
+            self._asset_body(name, classification="hardware"),
+            token,
+        )
+        self.assertEqual(400, status, payload)
+        new_events = self._new_events(before)
+        self.assertTrue(
+            any(
+                event.get("action") == "ASSET_CREATE"
+                and event.get("status") == "DENIED_INVALID"
+                for event in new_events
+            ),
+            "el rechazo por validacion no deja evento en la cadena: %s" % new_events,
+        )
+
+        # La primera escritura del caso es idempotente: si el activo ya existe
+        # de una ejecucion anterior, se actualiza en lugar de acumular otro.
+        self._ensure_asset_named(token, name)
+
+        before = self.audit_events()
+        status, payload = self.post("/api/v1/assets", self._asset_body(name), token)
+        self.assertEqual(409, status, payload)
+        self.assertEqual("ASSET_ALREADY_EXISTS", payload.get("code"))
+        new_events = self._new_events(before)
+        self.assertTrue(
+            any(
+                event.get("action") == "ASSET_CREATE"
+                and event.get("status") == "DENIED_DUPLICATE"
+                for event in new_events
+            ),
+            "el rechazo por duplicado no deja evento en la cadena: %s" % new_events,
+        )
+
+    def test_22_mfa_checker_detects_a_sensitive_action_without_mfa(self):
+        """Una accion sensible sin MFA o fuera de HUMAN_ONLY hace fallar al comprobador.
+
+        La prueba es negativa: no se conforma con que el comprobador imprima la
+        lista que vigila (eso se cumpliria solo). Se manipula una copia en
+        memoria de la tabla de permisos del modulo importado y se demuestra que
+        el comprobador devuelve ``failed`` cuando la politica se debilita. El
+        fichero ``backend/jwt_validator.py`` no se toca y la tabla se restaura.
+        """
+        token = self.token("medico.test")
+        status, payload = self.post(
+            "/api/v1/diagnostics/runs",
+            {"checker_ids": ["BACKEND_ADMIN_REQUIRES_MFA"]},
+            token, timeout=120,
+        )
+        self.assertEqual(201, status, payload)
+        findings = payload.get("findings") or []
+        self.assertEqual(1, len(findings), payload)
+        finding = findings[0]
+        self.assertEqual("BACKEND_ADMIN_REQUIRES_MFA", finding.get("checker_id"))
+        self.assertEqual(
+            "passed", finding.get("status"),
+            "el comprobador de MFA no pasa: %s" % finding.get("evidence_output"),
+        )
+        output = str(finding.get("evidence_output") or "")
+        for action in SENSITIVE_ACTIONS:
+            self.assertIn(action, output, "la evidencia no menciona la accion %s" % action)
+        self.assertIn("HUMAN_ONLY_ACTIONS", output)
+        # El comando de evidencia describe la operacion real: no cita un
+        # comando que no llega a ejecutarse.
+        self.assertNotIn("python3 -c", str(finding.get("evidence_command") or ""))
+
+        backend_dir = str(ROOT / "backend")
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        import jwt_validator
+        import security_diagnostics
+
+        # La tabla real sigue diciendo lo que el comprobador declara.
+        for action in SENSITIVE_ACTIONS:
+            policy = jwt_validator.CLINICAL_PERMISSIONS.get(action)
+            self.assertIsNotNone(
+                policy, "el backend no declara la accion sensible %s" % action,
+            )
+            self.assertIs(
+                True, policy.get("require_mfa"),
+                "la politica de %s no exige MFA acreditada" % action,
+            )
+            self.assertIn(
+                action, jwt_validator.HUMAN_ONLY_ACTIONS,
+                "la accion %s no esta en HUMAN_ONLY_ACTIONS: una cuenta de servicio "
+                "podria ejecutarla" % action,
+            )
+
+        original_permissions = security_diagnostics.CLINICAL_PERMISSIONS
+        original_human_only = security_diagnostics.HUMAN_ONLY_ACTIONS
+        try:
+            # Escenario 1: una accion sensible pierde require_mfa.
+            permissions = copy.deepcopy(original_permissions)
+            permissions["MANAGE_ASSETS"]["require_mfa"] = False
+            security_diagnostics.CLINICAL_PERMISSIONS = permissions
+            result = security_diagnostics.check_backend_admin_requires_mfa()
+            self.assertEqual(
+                "failed", result.status,
+                "el comprobador no detecta una accion sensible sin MFA",
+            )
+            self.assertIn("MANAGE_ASSETS", result.evidence_output)
+
+            # Escenario 2: una accion sensible sale de HUMAN_ONLY_ACTIONS.
+            security_diagnostics.CLINICAL_PERMISSIONS = copy.deepcopy(
+                original_permissions
+            )
+            security_diagnostics.HUMAN_ONLY_ACTIONS = set(original_human_only) - {
+                "MANAGE_IDENTITIES"
+            }
+            result = security_diagnostics.check_backend_admin_requires_mfa()
+            self.assertEqual(
+                "failed", result.status,
+                "el comprobador no detecta una accion sensible fuera de HUMAN_ONLY_ACTIONS",
+            )
+            self.assertIn("MANAGE_IDENTITIES", result.evidence_output)
+        finally:
+            security_diagnostics.CLINICAL_PERMISSIONS = original_permissions
+            security_diagnostics.HUMAN_ONLY_ACTIONS = original_human_only
+
+    def test_23_malformed_or_non_object_json_body_is_rejected_with_400(self):
+        """Un cuerpo JSON roto o que no es objeto responde 400 y no ejecuta nada."""
+        token = self.token("medico.test")
+        asset = self._ensure_asset_named(token, "prueba-f2-json")
+        paths = (
+            "/api/v1/assets",
+            "/api/v1/assets/%s" % asset["id"],
+            "/api/v1/assets/%s/evaluations" % asset["id"],
+            "/api/v1/diagnostics/runs",
+        )
+
+        status, summary_before = self.get(
+            "/api/v1/diagnostics/summary", self.token("auditor.test"),
+        )
+        self.assertEqual(200, status, summary_before)
+        runs_before = summary_before.get("runs_total")
+
+        for path in paths:
+            # JSON que no parsea: antes acababa en payload={} y, en
+            # /diagnostics/runs, disparaba el catalogo completo.
+            status, payload = self.post_raw(token, path, '{"checker_ids":')
+            self.assertEqual(400, status, "%s -> %s" % (path, payload))
+            self.assertEqual("INVALID_JSON_BODY", payload.get("code"), payload)
+            for key in ("error", "message", "code"):
+                self.assertIn(key, payload, payload)
+
+            # JSON valido que no es un objeto.
+            status, payload = self.post(path, [], token)
+            self.assertEqual(400, status, "%s -> %s" % (path, payload))
+            self.assertEqual("INVALID_JSON_BODY", payload.get("code"), payload)
+            for key in ("error", "message", "code"):
+                self.assertIn(key, payload, payload)
+
+        # Ningun cuerpo roto ejecuto comprobadores ni creo una ejecucion.
+        status, summary_after = self.get(
+            "/api/v1/diagnostics/summary", self.token("auditor.test"),
+        )
+        self.assertEqual(200, status, summary_after)
+        self.assertEqual(
+            runs_before, summary_after.get("runs_total"),
+            "un cuerpo JSON roto ejecuto el diagnostico",
+        )
+
+    def test_24_persistence_layer_rejects_invalid_asset_names(self):
+        """La capa de persistencia aplica la misma regla de nombre que la API."""
+        database = self._database_module()
+        self.assertIsNotNone(database, "no se pudo importar backend/database.py")
+
+        with tempfile.TemporaryDirectory(prefix="f11-f2-persistencia-") as tmp:
+            manager = database.ClinicalDatabaseManager(db_path=os.path.join(tmp, "lis.db"))
+            try:
+                base = {
+                    "id": "AST-PRUEBA-F2",
+                    "classification": "service",
+                    "criticality": "medium",
+                    "owner": TEST_ASSET_OWNER,
+                    "source": "manual",
+                    "version": "f2-suite",
+                    "environment": ENVIRONMENT,
+                    "synthetic": 1,
+                    "description": "Activo de prueba de la capa de persistencia.",
+                }
+                invalid_names = (
+                    "activo con espacios",
+                    'activo"con"comillas',
+                    "activo\ncon\ncontrol",
+                    "ab",
+                    "x" * 81,
+                )
+                for invalid_name in invalid_names:
+                    payload = dict(base)
+                    payload["name"] = invalid_name
+                    with self.assertRaises(database.AssetValidationError):
+                        manager.insert_asset(payload)
+
+                # Un nombre valido si se escribe: la regla no cierra mas de lo
+                # que debe.
+                payload = dict(base)
+                payload["name"] = "prueba-f2-persistencia"
+                stored = manager.insert_asset(payload)
+                self.assertEqual("prueba-f2-persistencia", stored.get("name"))
+            finally:
+                manager.close()
+
+
+    def test_25_every_finding_records_the_origin_of_its_evidence(self):
+        """Cada hallazgo declara de que mecanismo real salio su evidencia."""
+        token = self.token("medico.test")
+        status, payload = self.post(
+            "/api/v1/diagnostics/runs", {"checker_ids": None}, token, timeout=180,
+        )
+        self.assertEqual(201, status, payload)
+        findings = payload.get("findings") or []
+        self.assertTrue(findings, "la ejecucion no produjo hallazgos")
+
+        origenes = {
+            "keycloak_admin_api", "filesystem", "sqlite", "docker_inspect",
+            "docker_exec", "in_process",
+        }
+        for finding in findings:
+            origen = finding.get("evidence_source")
+            self.assertIn(
+                origen, origenes,
+                "el hallazgo %s no declara un origen de evidencia valido: %r"
+                % (finding.get("checker_id"), origen),
+            )
+            self.assertTrue(
+                str(finding.get("evidence_command") or "").strip(),
+                "el hallazgo %s no conserva la operacion que lo produjo"
+                % finding.get("checker_id"),
+            )
+            self.assertTrue(
+                str(finding.get("evidence_output") or "").strip(),
+                "el hallazgo %s no conserva el resultado de esa operacion"
+                % finding.get("checker_id"),
+            )
+            self.assertIsNotNone(
+                finding.get("detected_at"),
+                "el hallazgo %s no registra cuando se detecto" % finding.get("checker_id"),
+            )
+
+        # El origen declarado tiene que corresponder al mecanismo real de cada
+        # comprobador: validar solo el vocabulario no detecta un mapeo erroneo.
+        by_checker = {
+            finding.get("checker_id"): finding.get("evidence_source")
+            for finding in findings
+        }
+        fixed_mechanisms = {
+            "BACKEND_ADMIN_REQUIRES_MFA": "in_process",
+            "BACKEND_AUDIT_CHAIN_VALID": "sqlite",
+            "BACKEND_AUDIT_CHECKPOINT_CONSISTENT": "sqlite",
+            "BACKEND_AUTH_DELEGATED_TO_KEYCLOAK": "filesystem",
+            "CONTAINER_HARDENING": "docker_inspect",
+            "DATA_FILES_OWNER_ONLY": "filesystem",
+        }
+        for checker_id, expected in fixed_mechanisms.items():
+            self.assertEqual(
+                expected, by_checker.get(checker_id),
+                "el comprobador %s declara un origen que no es el suyo (%r)"
+                % (checker_id, by_checker.get(checker_id)),
+            )
+        for checker_id, origen in by_checker.items():
+            if str(checker_id).startswith("KC_"):
+                self.assertEqual(
+                    "keycloak_admin_api", origen,
+                    "el comprobador %s no declara la API de Keycloak" % checker_id,
+                )
+
+        # El bundle Angular es el unico con dos mecanismos posibles: debe
+        # declarar el que de verdad produjo la evidencia en esta ejecucion.
+        bundle_dir = ROOT / "frontend" / ".f11-dist" / "browser"
+        expected_bundle = "filesystem" if bundle_dir.is_dir() else "docker_exec"
+        self.assertEqual(
+            expected_bundle, by_checker.get("FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD"),
+            "el comprobador del bundle no declara el mecanismo que ejecuto",
+        )
+
+    def test_26_seed_runs_clean_and_is_idempotent_on_an_empty_database(self):
+        """La siembra crea los 11 activos y su unico ASSET_SEED en una base limpia."""
+        database = self._database_module()
+        backend_dir = str(ROOT / "backend")
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        import asset_inventory
+
+        with tempfile.TemporaryDirectory(prefix="f11-f2-siembra-") as tmp:
+            manager = database.ClinicalDatabaseManager(
+                db_path=os.path.join(tmp, "lis.db")
+            )
+            try:
+                first = asset_inventory.seed_catalog(manager)
+                self.assertFalse(first.get("already_seeded"), first)
+                self.assertEqual(11, len(first.get("created") or []), first)
+                self.assertEqual(11, len(asset_inventory.SEED_CATALOG))
+
+                assets = manager.list_assets()
+                self.assertEqual(11, len(assets), "la siembra no creo los 11 activos")
+                self.assertEqual(
+                    set(SEED_ASSET_NAMES), {asset["name"] for asset in assets},
+                    "la siembra no escribio exactamente el catalogo semilla",
+                )
+
+                events = [
+                    event for event in manager.get_audit_events()
+                    if event.get("action") == SEED_AUDIT_ACTION
+                ]
+                self.assertEqual(1, len(events), "la siembra no dejo un unico evento")
+                seed = events[0]
+                self.assertEqual("SYSTEM", seed.get("actor"), seed)
+                self.assertEqual("ALLOWED", seed.get("status"), seed)
+                self.assertIn("11 activos creados", str(seed.get("details") or ""))
+                self.assertIn("0 ya existentes", str(seed.get("details") or ""))
+
+                # Segunda ejecucion: no crea ni audita de nuevo.
+                second = asset_inventory.seed_catalog(manager)
+                self.assertTrue(second.get("already_seeded"), second)
+                self.assertEqual([], second.get("created"), second)
+                self.assertEqual(
+                    11, len(manager.list_assets()),
+                    "la segunda siembra duplico activos",
+                )
+                self.assertEqual(
+                    1,
+                    manager.count_audit_events_by_action(SEED_AUDIT_ACTION),
+                    "la segunda siembra volvio a auditar",
+                )
+            finally:
+                manager.close()
+
+    def test_27_asset_write_and_its_audit_event_commit_together(self):
+        """Si la auditoria falla, la transaccion revierte el activo completo."""
+        database = self._database_module()
+
+        with tempfile.TemporaryDirectory(prefix="f11-f2-atomico-") as tmp:
+            manager = database.ClinicalDatabaseManager(
+                db_path=os.path.join(tmp, "lis.db")
+            )
+            original_insert = manager._insert_audit_event
+
+            def failing_audit(cur, **kwargs):
+                raise database.DatabaseError("fallo de auditoria simulado en la prueba")
+
+            base = {
+                "id": "AST-PRUEBA-ATOMICA",
+                "name": "prueba-f2-atomico",
+                "classification": "service",
+                "criticality": "medium",
+                "owner": TEST_ASSET_OWNER,
+                "source": "manual",
+                "version": "f2-suite",
+                "environment": ENVIRONMENT,
+                "synthetic": 1,
+                "description": "Activo de prueba de atomicidad de la transaccion.",
+            }
+            audit_event = {
+                "action": "ASSET_CREATE",
+                "actor": "medico.test",
+                "role": "['ROLE_PLATFORM_ADMIN']",
+                "status": "ALLOWED",
+                "details": "Activo de prueba atomico",
+                "ip": "127.0.0.1",
+                "mfa_verified": True,
+            }
+            try:
+                manager._insert_audit_event = failing_audit
+                with self.assertRaises(database.DatabaseError):
+                    manager.insert_asset_with_audit_event(dict(base), dict(audit_event))
+
+                self.assertEqual(
+                    [], manager.list_assets(),
+                    "la transaccion no revirtio el activo cuando fallo la auditoria",
+                )
+                self.assertEqual(
+                    0, manager.count_audit_events_by_action("ASSET_CREATE"),
+                    "la transaccion dejo un evento de auditoria con la escritura revertida",
+                )
+
+                # Con la auditoria restaurada, la misma operacion confirma las dos.
+                manager._insert_audit_event = original_insert
+                asset, record = manager.insert_asset_with_audit_event(
+                    dict(base), dict(audit_event),
+                )
+                self.assertEqual("prueba-f2-atomico", asset.get("name"))
+                self.assertEqual("ASSET_CREATE", record.get("action"))
+                self.assertEqual(1, len(manager.list_assets()))
+                self.assertEqual(
+                    1, manager.count_audit_events_by_action("ASSET_CREATE")
+                )
+
+                # La actualizacion sigue la misma regla: si la auditoria falla,
+                # la revision no avanza.
+                manager._insert_audit_event = failing_audit
+                with self.assertRaises(database.DatabaseError):
+                    manager.update_asset_with_audit_event(
+                        "AST-PRUEBA-ATOMICA",
+                        {"criticality": "high"},
+                        dict(audit_event),
+                    )
+                current = manager.get_asset("AST-PRUEBA-ATOMICA")
+                self.assertEqual(1, int(current.get("revision") or 0))
+                self.assertEqual("medium", current.get("criticality"))
+            finally:
+                manager._insert_audit_event = original_insert
+                manager.close()
 
 
 if __name__ == "__main__":

@@ -205,3 +205,65 @@ fixtures deliberados de la propia suite:
 - F3 (M4 Matriz de riesgos + M5 Controles) puede apoyarse en los hallazgos y el
   inventario ya reales.
 
+## Cierre de la revision independiente de F2 (2026-10-22)
+
+Dos revisiones independientes se hicieron sobre el rango `add81d6..HEAD`. La
+primera encontro 13 defectos; la segunda verifico las correcciones y encontro
+un bloqueante de fondo. Estado final:
+
+### Corregido y verificado
+- **Evidencia verificable**. Cada hallazgo guarda la operacion real que lo
+  produjo, su resultado, la fecha, el estado y el **origen** del mecanismo
+  (`keycloak_admin_api`, `filesystem`, `sqlite`, `docker_inspect`, `docker_exec`,
+  `in_process`). El origen se emite desde la rama que se ejecuto, no desde una
+  tabla estatica. Migracion 4. Ningun comprobador cita un comando que no corre.
+- **Auditoria completa y atomica**. La siembra, el alta, la actualizacion y la
+  evaluacion de activos escriben el dato y su evento en la **misma transaccion**
+  (`run_clinical_transaction`): si la auditoria falla, no queda dato ni evento.
+  Los ocho caminos de rechazo dejan evento `DENIED_*` sin filtrar el cuerpo.
+- **`checker_ids`**: `null` ejecuta el catalogo, `[]` no ejecuta ninguno y una
+  lista ejecuta exactamente esos. Probado en los tres casos, punta a punta.
+- **Comprobador de MFA** ampliado a `MANAGE_IDENTITIES`, `RUN_DIAGNOSTICS` y
+  `MANAGE_ASSETS`, incluyendo su pertenencia a `HUMAN_ONLY_ACTIONS`. Tiene prueba
+  negativa: si una accion pierde la exigencia, el comprobador pasa a `failed`.
+- **Angular** usa el mismo criterio de MFA que el backend (`amr` lista con
+  `otp`/`totp`/`mfa-otp`, sin `acr`); la interfaz queda restrictiva ante la duda
+  y la API sigue siendo la autoridad. Cuerpo JSON invalido responde 400 y no
+  dispara la ejecucion completa.
+- **Comprobadores sin efectos secundarios**: el del rol protegido ya no hace un
+  `POST` de sonda; instrumenta el transporte y verifica el rechazo sin escribir.
+- **Higiene**: las pruebas reutilizan nombres fijos (`prueba-f2-*`) y son
+  idempotentes; la siembra se prueba en una base temporal con 11 activos y un
+  unico `ASSET_SEED`.
+
+### Minimo privilegio en el realm (sin debilitar MFA)
+- `admin.sinmfa.test` tenia `sgsi-admin` sin OTP y no lo usaba ninguna prueba:
+  se le retiro el rol y se **deshabilito** la cuenta. Se conserva como evidencia,
+  sin acceso.
+- `medico.sinmfa` conserva el rol **a proposito**: es el fixture que demuestra la
+  denegacion por MFA en tres pruebas. Su hallazgo sigue abierto y documentado.
+- `medico.test` sigue siendo el unico administrador funcional con TOTP.
+
+### Evidencia
+- Suite de API: **54/54** (27 previas + 27 de F2) contra la pila desplegada.
+- Navegador real: el administrador con MFA ejecuta el diagnostico y ve la
+  evidencia con su origen; el auditor ve los hallazgos y no puede ejecutar ni
+  dar de alta; cero campos de contrasena en la aplicacion.
+- Diagnostico en vivo: 10 comprobadores en verde y 2 en rojo legitimos
+  (`CONTAINER_HARDENING` por el `cap_drop` de keycloak y
+  `KC_MFA_ON_ADMIN_IDENTITIES` por el fixture). Un diagnostico que nunca falla
+  no demuestra nada.
+
+### Residual aceptado
+- Las escrituras de ordenes clinicas previas siguen con su patron original; la
+  atomicidad se aplico a todo el camino de F2.
+- El servidor HTTP sigue siendo de un solo hilo (documentado, no cambiado).
+- `CONTAINER_HARDENING` queda como hallazgo abierto: cerrarlo exige recrear
+  keycloak con `cap_drop: ALL` y verificar el SSO, fuera del alcance de F2.
+
+## Procedimiento pendiente: habilitar admin.test (manual, no ejecutado)
+
+Ver `odd/tasks/procedimiento-enrolamiento-admin.md`. No se retira `sgsi-admin`
+de `medico.test` hasta que `admin.test` se autentique con MFA y administre
+usuarios de verdad.
+
