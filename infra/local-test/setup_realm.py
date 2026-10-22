@@ -760,6 +760,9 @@ class BrowserFlow:
                     status, html, location = self._get(
                         manual_match.group(1).replace("&amp;", "&")
                     )
+                    # La clave manual se muestra en la pagina siguiente:
+                    # sin capturarla aqui el secreto se pierde y el enrolment no cierra.
+                    discovered_secret = self._totp_secret(html) or discovered_secret
                     continue
                 discovered_secret = self._totp_secret(html)
                 hidden_secret = self._hidden_value(html, "totpSecret")

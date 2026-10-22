@@ -113,12 +113,13 @@ class IdentityAdminSuite(unittest.TestCase):
         self.assertIn("sgsi-admin", names)
 
     def test_03_admin_without_mfa_is_denied(self):
-        if not ADMIN_SINMFA_FILE.is_file():
-            self.skipTest("no hay cuenta de administracion sin MFA disponible")
-        creds = json.loads(ADMIN_SINMFA_FILE.read_text(encoding="utf-8"))
-        token = self.token(
-            creds["username"], password=creds["password"], totp_secret=None,
-        )
+        """Un administrador con el rol pero sin OTP recibe 403 por MFA.
+
+        La cuenta es medico.sinmfa: el rol de plataforma esta asignado, pero
+        no tiene TOTP, de modo que su token llega sin evidencia OTP y la
+        accion de administracion debe rechazarse por la falta de MFA.
+        """
+        token = self.token("medico.sinmfa", totp_secret=None)
         status, payload = self.call(token, "GET", "/api/v1/admin/identities")
         self.assertEqual(403, status, payload)
         self.assertEqual("MFA_AUTHENTICATION_REQUIRED", payload.get("code"))
