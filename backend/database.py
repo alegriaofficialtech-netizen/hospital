@@ -992,6 +992,28 @@ class ClinicalDatabaseManager:
             return stored_run, stored
         return self._run_simple_write(operation)
 
+    def insert_diagnostic_run_with_findings_and_audit_event(
+        self,
+        run: Dict[str, Any],
+        findings: List[Dict[str, Any]],
+        audit_event: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Guarda la ejecucion, sus hallazgos y el evento ``DIAGNOSTIC_RUN`` en una sola transaccion.
+
+        Si la ejecucion, cualquiera de los hallazgos o la insercion del evento
+        fallan, se revierte todo: no queda una ejecucion sin su rastro de
+        auditoria ni hallazgos huerfanos. El evento se construye en el llamador
+        y se inserta con el mismo cursor que las escrituras clinicas.
+        """
+        def operation(cur: sqlite3.Cursor) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+            stored_run = self._insert_diagnostic_run_cursor(cur, run)
+            stored = [self._insert_security_finding_cursor(cur, finding) for finding in findings]
+            return stored_run, stored
+
+        (stored_run, stored_findings), record = self.run_clinical_transaction(operation, audit_event)
+        return stored_run, stored_findings, record
+
     def list_diagnostic_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Lista las ejecuciones de diagnóstico más recientes."""
         with self._lock:

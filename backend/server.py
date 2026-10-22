@@ -1238,16 +1238,23 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 len(results), F11_ENVIRONMENT,
             ),
         }
-        stored_run, stored_findings = db_manager.insert_diagnostic_run_with_findings(run, findings)
-        record_audit_event(
-            "DIAGNOSTIC_RUN", context.username, str(list(context.roles)), "ALLOWED",
-            "Ejecucion %s: %d comprobadores, hallazgos por severidad: critical=%d high=%d "
-            "medium=%d low=%d" % (
-                run_id, len(results),
-                by_severity.get("critical", 0), by_severity.get("high", 0),
-                by_severity.get("medium", 0), by_severity.get("low", 0),
-            ),
-            client_ip, context.mfa_verified,
+        stored_run, stored_findings, _ = db_manager.insert_diagnostic_run_with_findings_and_audit_event(
+            run,
+            findings,
+            {
+                "action": "DIAGNOSTIC_RUN",
+                "actor": context.username,
+                "role": str(list(context.roles)),
+                "status": "ALLOWED",
+                "details": "Ejecucion %s: %d comprobadores, hallazgos por severidad: critical=%d high=%d "
+                "medium=%d low=%d" % (
+                    run_id, len(results),
+                    by_severity.get("critical", 0), by_severity.get("high", 0),
+                    by_severity.get("medium", 0), by_severity.get("low", 0),
+                ),
+                "ip": client_ip,
+                "mfa_verified": context.mfa_verified,
+            },
         )
         self.send_json(201, {
             "run": stored_run,

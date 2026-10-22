@@ -100,16 +100,20 @@ def load_setup_realm():
 
 
 def mfa_evidence(result):
-    """True si el token emitido acredita el segundo factor."""
+    """True si el token emitido acredita el segundo factor con el criterio del backend.
+
+    Alineado con la plataforma: ``amr`` debe ser una lista de metodos y solo
+    cuentan ``otp``, ``totp`` o ``mfa-otp``. Un ``amr`` escalar y el claim
+    ``acr`` no acreditan MFA por si solos. El arnes puede producir falsos
+    negativos, pero nunca acepta un token que el backend rechazaria.
+    """
     claims = result.get("claims") or {}
-    amr = claims.get("amr") or []
-    if isinstance(amr, str):
-        amr = [amr]
-    acr = str(claims.get("acr", "")).lower()
-    return (
-        any(str(value).lower() == "otp" for value in amr)
-        or "otp" in acr
-        or "mfa" in acr
+    amr = claims.get("amr")
+    if not isinstance(amr, list):
+        return False
+    return any(
+        isinstance(method, str) and method.strip().lower() in ("otp", "totp", "mfa-otp")
+        for method in amr
     )
 
 
@@ -1216,8 +1220,20 @@ class F2CorrectionsApiSuite(F2ApiSuite):
             "keycloak_admin_api", "filesystem", "sqlite", "docker_inspect",
             "docker_exec", "in_process",
         }
+        # El centinela de omision no es un origen valido: si un comprobador no
+        # declara de donde salio su evidencia, la prueba debe fallar en vez de
+        # aceptarlo como si fuera ``in_process``.
+        self.assertNotIn(
+            "undeclared", origenes,
+            "el centinela de origen no declarado no puede ser un origen valido",
+        )
         for finding in findings:
             origen = finding.get("evidence_source")
+            self.assertNotEqual(
+                "undeclared", origen,
+                "el comprobador %s no declara el origen de su evidencia"
+                % finding.get("checker_id"),
+            )
             self.assertIn(
                 origen, origenes,
                 "el hallazgo %s no declara un origen de evidencia valido: %r"
@@ -1398,6 +1414,115 @@ class F2CorrectionsApiSuite(F2ApiSuite):
                 current = manager.get_asset("AST-PRUEBA-ATOMICA")
                 self.assertEqual(1, int(current.get("revision") or 0))
                 self.assertEqual("medium", current.get("criticality"))
+            finally:
+                manager._insert_audit_event = original_insert
+                manager.close()
+
+    def test_28_diagnostic_run_and_its_audit_event_commit_together(self):
+        """Si la auditoria falla, no quedan ni la ejecucion ni sus hallazgos."""
+        database = self._database_module()
+
+        with tempfile.TemporaryDirectory(prefix="f11-f2-run-atomico-") as tmp:
+            manager = database.ClinicalDatabaseManager(
+                db_path=os.path.join(tmp, "lis.db")
+            )
+            original_insert = manager._insert_audit_event
+            run_id = "RUN-PRUEBA-ATOMICA"
+
+            def failing_audit(cur, **kwargs):
+                raise database.DatabaseError("fallo de auditoria simulado en la prueba")
+
+            run = {
+                "id": run_id,
+                "started_at": 1700000000.0,
+                "finished_at": 1700000005.0,
+                "status": "completed",
+                "checker_count": 2,
+                "passed": 1,
+                "failed": 1,
+                "warnings": 0,
+                "triggered_by": "medico.test",
+                "environment": ENVIRONMENT,
+                "notes": "Ejecucion de prueba de atomicidad.",
+            }
+            findings = [
+                {
+                    "id": "FND-PRUEBA-ATOMICA-1",
+                    "run_id": run_id,
+                    "checker_id": "BACKEND_AUDIT_CHAIN_VALID",
+                    "title": "Cadena de auditoria valida",
+                    "objective": "O2",
+                    "severity": "high",
+                    "status": "passed",
+                    "asset_ref": "backend",
+                    "evidence_command": "verificar cadena",
+                    "evidence_output": "cadena valida",
+                    "evidence_source": "sqlite",
+                    "remediation": "ninguna",
+                    "detected_at": 1700000005.0,
+                },
+                {
+                    "id": "FND-PRUEBA-ATOMICA-2",
+                    "run_id": run_id,
+                    "checker_id": "DATA_FILES_OWNER_ONLY",
+                    "title": "Ficheros de datos con permisos del propietario",
+                    "objective": "O2",
+                    "severity": "medium",
+                    "status": "failed",
+                    "asset_ref": "backend",
+                    "evidence_command": "revisar permisos",
+                    "evidence_output": "permisos amplios",
+                    "evidence_source": "filesystem",
+                    "remediation": "restringir permisos",
+                    "detected_at": 1700000005.0,
+                },
+            ]
+            audit_event = {
+                "action": "DIAGNOSTIC_RUN",
+                "actor": "medico.test",
+                "role": "['ROLE_PLATFORM_ADMIN']",
+                "status": "ALLOWED",
+                "details": "Ejecucion de prueba atomica",
+                "ip": "127.0.0.1",
+                "mfa_verified": True,
+            }
+            try:
+                manager._insert_audit_event = failing_audit
+                with self.assertRaises(database.DatabaseError):
+                    manager.insert_diagnostic_run_with_findings_and_audit_event(
+                        dict(run), [dict(finding) for finding in findings], dict(audit_event),
+                    )
+
+                self.assertIsNone(
+                    manager.get_diagnostic_run(run_id),
+                    "la transaccion no revirtio la ejecucion cuando fallo la auditoria",
+                )
+                self.assertEqual(
+                    [], manager.list_security_findings(run_id=run_id),
+                    "la transaccion no revirtio los hallazgos cuando fallo la auditoria",
+                )
+                self.assertEqual(
+                    0, manager.count_audit_events_by_action("DIAGNOSTIC_RUN"),
+                    "la transaccion dejo un evento con la ejecucion revertida",
+                )
+
+                # Con la auditoria restaurada, la misma operacion confirma las tres.
+                manager._insert_audit_event = original_insert
+                stored_run, stored_findings, record = (
+                    manager.insert_diagnostic_run_with_findings_and_audit_event(
+                        dict(run), [dict(finding) for finding in findings], dict(audit_event),
+                    )
+                )
+                self.assertEqual(run_id, stored_run.get("id"))
+                self.assertEqual(2, len(stored_findings))
+                self.assertEqual("DIAGNOSTIC_RUN", record.get("action"))
+                self.assertIsNotNone(manager.get_diagnostic_run(run_id))
+                self.assertEqual(
+                    2, len(manager.list_security_findings(run_id=run_id)),
+                )
+                self.assertEqual(
+                    1, manager.count_audit_events_by_action("DIAGNOSTIC_RUN"),
+                )
             finally:
                 manager._insert_audit_event = original_insert
                 manager.close()

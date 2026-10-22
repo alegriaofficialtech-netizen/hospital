@@ -72,13 +72,13 @@ La plataforma cubre los cuatro objetivos de la tesis:
 |---|---|---|---|---|---|---|
 | M0 | | | x | x | Flujo clinico completo con rol minimo, MFA obligatorio en la validacion y auditoria encadenada | real, verificado |
 | M1 | | | x | x | Identidades sinteticas, roles del realm, denegaciones reales por rol y por MFA, eventos de gestion en la cadena | real, verificado (F1) |
-| M2 | x | | | | Hallazgos con el comando que los produjo y su salida, sin juicio propio | pendiente |
-| M3 | | x | | | Activos con su origen (contenedor, servicio, fichero) y su version | pendiente |
+| M2 | x | | | | 12 comprobadores ejecutables; cada hallazgo guarda la operacion real, su resultado, la fecha, el estado y el origen del mecanismo (API de Keycloak, ficheros, SQLite, docker inspect). RBAC de lectura y escritura con MFA, e historial de ejecuciones | real, verificado (F2) |
+| M3 | | x | | | Inventario de los componentes reales con clasificacion, criticidad, responsable, origen, version y marca de sintetico; alta y edicion con MFA, e historial de evaluaciones por activo | real, verificado (F2) |
 | M4 | | x | x | | Riesgos con probabilidad, impacto y severidad calculada, enlazados a activos y hallazgos | pendiente |
 | M5 | | | x | | Estado de cada control con su evidencia enlazada; nunca "cumple" sin evidencia | pendiente |
 | M6 | | | | x | Incidentes con deteccion, accion, cierre y su registro en auditoria | pendiente |
 | M7 | | | x | x | Cadena de hash verificada y su checkpoint | real, verificado |
-| M8 | | | | x | Indicadores con la consulta que los produce | pendiente |
+| M8 | | | | x | Indicadores con la consulta que los produce. Parcial: ya son reales los del diagnostico y el inventario (reparto por estado, severidad, objetivo, clasificacion y criticidad, cada uno con su campo de origen) | parcial, verificado (F2) |
 | M9 | | | | x | Dictamenes de terceros con autor, fecha y alcance; generados por la plataforma: ninguno | pendiente |
 
 ## 6. Lo que ya esta resuelto y sirve de base
@@ -205,61 +205,88 @@ fixtures deliberados de la propia suite:
 - F3 (M4 Matriz de riesgos + M5 Controles) puede apoyarse en los hallazgos y el
   inventario ya reales.
 
-## Cierre de la revision independiente de F2 (2026-10-22)
+## Cierre formal de F2 (2026-10-22)
 
-Dos revisiones independientes se hicieron sobre el rango `add81d6..HEAD`. La
-primera encontro 13 defectos; la segunda verifico las correcciones y encontro
-un bloqueante de fondo. Estado final:
+F2 queda cerrada sobre tres revisiones independientes y una suite de 55 casos.
+Lo que sigue es el estado real, sin presentar como resuelto lo que no lo esta.
 
-### Corregido y verificado
-- **Evidencia verificable**. Cada hallazgo guarda la operacion real que lo
-  produjo, su resultado, la fecha, el estado y el **origen** del mecanismo
-  (`keycloak_admin_api`, `filesystem`, `sqlite`, `docker_inspect`, `docker_exec`,
-  `in_process`). El origen se emite desde la rama que se ejecuto, no desde una
-  tabla estatica. Migracion 4. Ningun comprobador cita un comando que no corre.
-- **Auditoria completa y atomica**. La siembra, el alta, la actualizacion y la
-  evaluacion de activos escriben el dato y su evento en la **misma transaccion**
-  (`run_clinical_transaction`): si la auditoria falla, no queda dato ni evento.
-  Los ocho caminos de rechazo dejan evento `DENIED_*` sin filtrar el cuerpo.
-- **`checker_ids`**: `null` ejecuta el catalogo, `[]` no ejecuta ninguno y una
-  lista ejecuta exactamente esos. Probado en los tres casos, punta a punta.
-- **Comprobador de MFA** ampliado a `MANAGE_IDENTITIES`, `RUN_DIAGNOSTICS` y
-  `MANAGE_ASSETS`, incluyendo su pertenencia a `HUMAN_ONLY_ACTIONS`. Tiene prueba
-  negativa: si una accion pierde la exigencia, el comprobador pasa a `failed`.
-- **Angular** usa el mismo criterio de MFA que el backend (`amr` lista con
-  `otp`/`totp`/`mfa-otp`, sin `acr`); la interfaz queda restrictiva ante la duda
-  y la API sigue siendo la autoridad. Cuerpo JSON invalido responde 400 y no
-  dispara la ejecucion completa.
-- **Comprobadores sin efectos secundarios**: el del rol protegido ya no hace un
-  `POST` de sonda; instrumenta el transporte y verifica el rechazo sin escribir.
-- **Higiene**: las pruebas reutilizan nombres fijos (`prueba-f2-*`) y son
-  idempotentes; la siembra se prueba en una base temporal con 11 activos y un
-  unico `ASSET_SEED`.
+### Que hace F2
 
-### Minimo privilegio en el realm (sin debilitar MFA)
-- `admin.sinmfa.test` tenia `sgsi-admin` sin OTP y no lo usaba ninguna prueba:
-  se le retiro el rol y se **deshabilito** la cuenta. Se conserva como evidencia,
-  sin acceso.
-- `medico.sinmfa` conserva el rol **a proposito**: es el fixture que demuestra la
-  denegacion por MFA en tres pruebas. Su hallazgo sigue abierto y documentado.
-- `medico.test` sigue siendo el unico administrador funcional con TOTP.
+**M2 Diagnostico de seguridad (O1).** Doce comprobadores ejecutables contra la
+configuracion efectiva del laboratorio F11: PKCE S256, autorregistro y reset de
+contrasena deshabilitados, MFA en las identidades con rol de plataforma, rol
+protegido no concedible, login local delegado a Keycloak, MFA obligatoria en las
+acciones sensibles, cadena y checkpoint de auditoria, bundle Angular sin campos
+de contrasena, endurecimiento de contenedores y permisos 0600 de los datos.
+Cada hallazgo guarda la operacion real, su resultado, la fecha, el estado y el
+origen del mecanismo; no se cita ningun comando que no se haya ejecutado.
 
-### Evidencia
-- Suite de API: **54/54** (27 previas + 27 de F2) contra la pila desplegada.
-- Navegador real: el administrador con MFA ejecuta el diagnostico y ve la
+**M3 Inventario de activos (O2).** Once componentes reales con clasificacion,
+criticidad, responsable (rol, nunca una persona), origen, version y marca de
+sintetico, mas alta, edicion e historial de evaluaciones. Es la base de la
+matriz de riesgos de M4.
+
+### Hallazgos de las revisiones y su estado
+
+| # | Defecto | Estado |
+|---|---|---|
+| C1 | La siembra del inventario no dejaba evento de auditoria | corregido: siembra y evento en una transaccion; fallo de siembra detiene el arranque |
+| C2 | `checker_ids: []` ejecutaba los 12 comprobadores | corregido: `null` = catalogo, `[]` = ninguno, lista = esos |
+| C3 | Ocho rechazos F2 sin evento en la cadena | corregido: `DENIED_*` en los ocho caminos, sin filtrar el cuerpo |
+| C4 | `evidence_command` citaba comandos que no se ejecutaban | corregido: se guarda la operacion real |
+| C5 | El comprobador de MFA solo vigilaba `MANAGE_IDENTITIES` | corregido: las tres acciones y su pertenencia a `HUMAN_ONLY_ACTIONS` |
+| C6 | Un titulo afirmaba mas de lo que comprobaba | corregido: titulo y descripcion describen la comprobacion real |
+| C7 | Un cuerpo JSON invalido disparaba la ejecucion completa | corregido: 400 sin ejecutar nada |
+| C8 | La validacion del nombre vivia solo en la capa HTTP | corregido: misma regla en persistencia |
+| C9 | El frontend aceptaba una MFA que el backend rechaza | corregido: mismo criterio (`amr` lista, sin `acr`); la API sigue siendo la autoridad |
+| C10 | El campo `version` no se podia borrar | corregido: "no enviado" y "null" son distinguibles |
+| N1 | El run de diagnostico no era atomico con su evento | corregido: run, hallazgos y `DIAGNOSTIC_RUN` en una transaccion (`test_28`) |
+| N2 | La siembra comprueba el evento fuera de su transaccion (TOCTOU) | documentado como limitacion: fail-closed con un unico proceso |
+| N3 | El fallback de origen disfrazaba omisiones | corregido: centinela `undeclared`, que la prueba rechaza |
+| N4 | El arnes de pruebas era mas laxo que el backend con `amr` | corregido: mismo criterio, solo puede dar falsos negativos |
+
+### Verificacion
+
+- **55/55 pruebas de API** (27 previas + 28 de F2) contra la pila desplegada.
+- **Migracion 4** aplicada: `security_findings.evidence_source` existe y la API
+  lo publica.
+- **Atomicidad probada por mutacion**, no por lectura: `test_27` fuerza el fallo
+  de auditoria y exige que no quede el activo; `test_28` hace lo mismo con la
+  ejecucion y sus hallazgos. Se rompio la implementacion a proposito y ambas
+  pruebas fallaron, luego se restauro.
+- **Navegador real**: el administrador con MFA ejecuta el diagnostico y ve la
   evidencia con su origen; el auditor ve los hallazgos y no puede ejecutar ni
   dar de alta; cero campos de contrasena en la aplicacion.
-- Diagnostico en vivo: 10 comprobadores en verde y 2 en rojo legitimos
+- **Diagnostico en vivo**: 10 comprobadores en verde y 2 en rojo legitimos
   (`CONTAINER_HARDENING` por el `cap_drop` de keycloak y
   `KC_MFA_ON_ADMIN_IDENTITIES` por el fixture). Un diagnostico que nunca falla
   no demuestra nada.
 
-### Residual aceptado
-- Las escrituras de ordenes clinicas previas siguen con su patron original; la
-  atomicidad se aplico a todo el camino de F2.
-- El servidor HTTP sigue siendo de un solo hilo (documentado, no cambiado).
-- `CONTAINER_HARDENING` queda como hallazgo abierto: cerrarlo exige recrear
-  keycloak con `cap_drop: ALL` y verificar el SSO, fuera del alcance de F2.
+### Minimo privilegio en el realm
+
+- `admin.sinmfa.test` tenia `sgsi-admin` sin OTP y no lo usaba ninguna prueba:
+  se le retiro el rol y se deshabilito la cuenta. Se conserva como evidencia.
+- `medico.sinmfa` conserva el rol **exclusivamente como fixture sintetico** de
+  la denegacion por MFA. No es un acceso administrativo efectivo: sin segundo
+  factor la API le responde 403 y la interfaz no le habilita la accion.
+- `medico.test` es el administrador provisional con TOTP hasta que `admin.test`
+  se enrolle y se verifique.
+
+### Limitaciones declaradas
+
+- La siembra del inventario comprueba su evento en una transaccion distinta de
+  la insercion (TOCTOU). Con un unico proceso es correcta y fail-closed; con dos
+  arranques concurrentes el segundo aborta. Decidido y documentado, no oculto.
+- El servidor HTTP sigue siendo de un solo hilo: una ejecucion de diagnostico
+  bloquea la API durante su duracion.
+- `CONTAINER_HARDENING` queda abierto: cerrarlo exige recrear keycloak con
+  `cap_drop: ALL` y verificar el SSO, fuera del alcance de F2.
+- `insert_asset`, `update_asset` e `insert_asset_evaluation` siguen siendo
+  llamables sin auditoria; hoy solo los usan las pruebas. Es una trampa para un
+  llamador futuro y esta anotado.
+- El inventario acumula activos `prueba-f2-*` de las ejecuciones de la suite;
+  no se borran porque no hay endpoint de borrado y borrarlos ocultaria el
+  historial de evaluacion.
 
 ## Procedimiento pendiente: habilitar admin.test (manual, no ejecutado)
 

@@ -485,6 +485,15 @@ def seed_catalog(db: Any) -> Dict[str, Any]:
     existing_names = {str(asset.get("name") or "") for asset in existing}
     existing_ids = {str(asset.get("id") or "") for asset in existing}
 
+    # LIMITACION CONOCIDA (TOCTOU): la comprobacion del evento ASSET_SEED y la
+    # insercion de los activos ocurren en transacciones distintas. Con un unico
+    # proceso, que es como arranca hoy la plataforma, la comprobacion es
+    # correcta y fail-closed: si el evento ya existe no se toca el inventario.
+    # Con dos arranques concurrentes, ambos podrian leer cero eventos antes de
+    # que ninguno confirme; el segundo fallaria al insertar su propio evento y
+    # abortaria el arranque. Se elige abortar en vez de tolerar la carrera
+    # porque una siembra doble silenciosa romperia la idempotencia y la
+    # auditoria, y un fallo ruidoso es preferible a un inventario duplicado.
     if db.count_audit_events_by_action(SEED_AUDIT_ACTION) > 0:
         # La siembra ya se hizo y quedo auditada: el arranque no vuelve a
         # tocar el inventario. Es lo que evita que un activo renombrado por la

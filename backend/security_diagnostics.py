@@ -103,6 +103,10 @@ class CheckResult:
 # (por ejemplo, el del bundle Angular: sistema de ficheros o contenedor) lo
 # emiten desde la rama que produjo la evidencia final, para no declarar un
 # origen que no se ejecuto.
+#
+# Un comprobador que no figure aqui recibe el origen ``undeclared``, que NO es
+# un origen valido: la omision se ve en la evidencia y en la prueba, en lugar de
+# etiquetarse por defecto como ``in_process`` y pasar desapercibida.
 EVIDENCE_SOURCES: Dict[str, str] = {
     "KC_PKCE_S256": "keycloak_admin_api",
     "KC_REGISTRATION_DISABLED": "keycloak_admin_api",
@@ -1401,7 +1405,7 @@ def run_checks(checker_ids: Optional[List[str]] = None) -> List[CheckResult]:
         try:
             result = checker()
             if not result.evidence_source:
-                result.evidence_source = EVIDENCE_SOURCES.get(result.checker_id, "in_process")
+                result.evidence_source = EVIDENCE_SOURCES.get(result.checker_id, "undeclared")
             results.append(result)
         except Exception as exc:
             meta = CHECKER_META[checker_id]
@@ -1412,7 +1416,7 @@ def run_checks(checker_ids: Optional[List[str]] = None) -> List[CheckResult]:
                 severity=meta["severity"],
                 status="warning",
                 asset_ref=meta["asset_ref"],
-                evidence_source=EVIDENCE_SOURCES.get(checker_id, "in_process"),
+                evidence_source=EVIDENCE_SOURCES.get(checker_id, "undeclared"),
                 evidence_command=(
                     "llamada a la funcion check_%s() del modulo backend/security_diagnostics.py "
                     "en el proceso" % checker_id.lower()
