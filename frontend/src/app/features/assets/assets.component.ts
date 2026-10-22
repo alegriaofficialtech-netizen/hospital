@@ -471,6 +471,10 @@ export class AssetsComponent {
       criticality: this.formCriticality() as AssetCriticality,
       owner: this.formOwner().trim(),
       source: this.formSource() as AssetSource,
+      // An empty version is sent as null on purpose: the backend tells "not
+      // sent" from "sent as null" and a null version clears the stored value.
+      // That is why the field can be emptied from the form and the change
+      // really reaches the inventory.
       version: version ? version : null,
       description: this.formDescription().trim(),
     };

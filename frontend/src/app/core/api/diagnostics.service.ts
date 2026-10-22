@@ -63,6 +63,7 @@ export interface SecurityFinding {
   asset_ref: string | null;
   evidence_command: string | null;
   evidence_output: string | null;
+  evidence_source: string | null;
   remediation: string | null;
   detected_at: number | null;
 }

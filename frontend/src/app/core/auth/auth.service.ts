@@ -37,6 +37,19 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Methods of the `amr` claim that the backend accepts as MFA evidence.
+ *
+ * The backend (backend/jwt_validator.py, `_verify_mfa_proof`) only accepts an
+ * explicit AMR method: 'otp', 'totp' or 'mfa-otp'. The `acr` claim is NOT
+ * accepted, because the trusted ACR level is not configured in this
+ * environment. The interface gate and the API gate must apply the same
+ * criterion: otherwise the interface enables a button ("Ejecutar
+ * diagnostico", "Guardar activo") that the API answers with 403
+ * MFA_AUTHENTICATION_REQUIRED.
+ */
+const MFA_AMR_METHODS: readonly string[] = ['otp', 'totp', 'mfa-otp'];
+
 const ROLE_ALIASES: Record<string, UserRole> = {
   reception: 'ROLE_RECEPTION',
   recepcion: 'ROLE_RECEPTION',
@@ -292,18 +305,17 @@ export class AuthService {
     const roles = Array.from(
       new Set(realmRoles.map((role) => mapRealmRole(role)).filter((role): role is UserRole => !!role)),
     );
-    const amr = Array.isArray(parsed?.amr)
-      ? parsed?.amr
-      : typeof parsed?.amr === 'string'
-        ? [parsed.amr]
-        : [];
-    const acr = typeof parsed?.acr === 'string' ? parsed.acr.toLowerCase() : '';
-    const acrLevel = Number.parseInt(acr, 10);
-    const mfaVerified =
-      amr.some((value) => value.toLowerCase() === 'otp') ||
-      acr.includes('otp') ||
-      acr.includes('mfa') ||
-      (Number.isFinite(acrLevel) && acrLevel >= 2);
+    const amr = Array.isArray(parsed?.amr) ? parsed?.amr : [];
+    // Same criterion as the backend: only an explicit list of AMR methods
+    // proves MFA. The backend rejects a scalar `amr` outright
+    // (backend/jwt_validator.py: `isinstance(amr, list)`), so accepting
+    // `amr: "otp"` here would enable actions the API answers with 403.
+    // When in doubt the interface stays restrictive: no AMR list, no MFA.
+    // The `acr` claim is deliberately not used: the backend does not accept it
+    // either, because the trusted ACR level is not configured.
+    const mfaVerified = amr.some(
+      (value) => typeof value === 'string' && MFA_AMR_METHODS.includes(value.toLowerCase()),
+    );
 
     const session: SessionUser = {
       username: parsed?.preferred_username ?? parsed?.name ?? 'keycloak-user',

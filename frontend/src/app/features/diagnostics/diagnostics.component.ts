@@ -56,24 +56,36 @@ interface BreakdownEntry {
       <div class="evidence-block">
         <span class="evidence-label">
           <mat-icon>terminal</mat-icon>
-          Comando que produjo la evidencia
+          Operación que produjo la evidencia
         </span>
         @if (finding().evidence_command) {
           <pre class="evidence-command"><code>{{ finding().evidence_command }}</code></pre>
         } @else {
-          <p class="evidence-empty">El hallazgo no trae comando asociado.</p>
+          <p class="evidence-empty">El hallazgo no trae operación asociada.</p>
+        }
+      </div>
+
+      <div class="evidence-block">
+        <span class="evidence-label">
+          <mat-icon>source</mat-icon>
+          Origen de la evidencia
+        </span>
+        @if (finding().evidence_source) {
+          <p class="evidence-remediation">{{ finding().evidence_source }}</p>
+        } @else {
+          <p class="evidence-empty">El hallazgo no declara el origen de su evidencia.</p>
         }
       </div>
 
       <div class="evidence-block">
         <span class="evidence-label">
           <mat-icon>receipt_long</mat-icon>
-          Salida del comando
+          Resultado de la operación
         </span>
         @if (finding().evidence_output) {
           <pre class="evidence-output">{{ finding().evidence_output }}</pre>
         } @else {
-          <p class="evidence-empty">El hallazgo no trae salida asociada.</p>
+          <p class="evidence-empty">El hallazgo no trae resultado asociado.</p>
         }
       </div>
 

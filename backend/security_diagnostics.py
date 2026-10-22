@@ -23,6 +23,12 @@ y una peticion a si mismo durante una peticion en curso se bloquearia para
 siempre. En su lugar se lee el codigo efectivo y la configuracion que el
 proceso tiene cargada en memoria, que es la misma configuracion con la que
 el servicio responderia.
+
+El ``evidence_command`` de cada hallazgo describe la OPERACION REAL que
+produjo la evidencia: la peticion HTTP concreta a la API de administracion
+de Keycloak con su ruta, la lectura del fichero concreto con su ruta, la
+consulta SQL concreta o el ``docker inspect`` que si se ejecuta. No se cita
+un comando que no llega a ejecutarse.
 """
 
 from __future__ import annotations
@@ -86,6 +92,30 @@ class CheckResult:
     evidence_command: str
     evidence_output: str
     remediation: str
+    # Mecanismo real que produjo la evidencia (API de Keycloak, sistema de
+    # ficheros, SQLite, docker inspect o el propio proceso). Permite
+    # reconstruir de donde salio el hallazgo sin leer el codigo.
+    evidence_source: str = ""
+
+
+# Origen real de la evidencia de cada comprobador. Solo se declara aqui lo que
+# tiene un mecanismo unico y fijo. Los comprobadores con mas de un mecanismo
+# (por ejemplo, el del bundle Angular: sistema de ficheros o contenedor) lo
+# emiten desde la rama que produjo la evidencia final, para no declarar un
+# origen que no se ejecuto.
+EVIDENCE_SOURCES: Dict[str, str] = {
+    "KC_PKCE_S256": "keycloak_admin_api",
+    "KC_REGISTRATION_DISABLED": "keycloak_admin_api",
+    "KC_PASSWORD_RESET_DISABLED": "keycloak_admin_api",
+    "KC_MFA_ON_ADMIN_IDENTITIES": "keycloak_admin_api",
+    "KC_PROTECTED_ROLE_NOT_GRANTABLE": "keycloak_admin_api",
+    "BACKEND_AUTH_DELEGATED_TO_KEYCLOAK": "filesystem",
+    "BACKEND_ADMIN_REQUIRES_MFA": "in_process",
+    "BACKEND_AUDIT_CHAIN_VALID": "sqlite",
+    "BACKEND_AUDIT_CHECKPOINT_CONSISTENT": "sqlite",
+    "CONTAINER_HARDENING": "docker_inspect",
+    "DATA_FILES_OWNER_ONLY": "filesystem",
+}
 
 
 # --------------------------------------------------------------------------
@@ -147,29 +177,34 @@ CHECKER_CATALOG: List[Dict[str, str]] = [
         "severity": "high",
         "description": (
             "Comprueba que el rol de plataforma existe en el realm, que la aplicacion lo "
-            "declara protegido y que la llamada real de asignacion de roles lo rechaza."
+            "declara protegido y que la funcion real de asignacion lo rechaza antes de "
+            "emitir el mapeo de escritura (la sonda solo ejecuta lecturas)."
         ),
         "asset_ref": "keycloak-iam",
     },
     {
         "id": "BACKEND_AUTH_DELEGATED_TO_KEYCLOAK",
-        "title": "El login local esta deshabilitado",
+        "title": "El backend rechaza el login local con 410 AUTH_DELEGATED_TO_KEYCLOAK",
         "objective": "O1",
         "severity": "medium",
         "description": (
-            "Comprueba en el codigo efectivo del backend y en la configuracion cargada en "
-            "el proceso que el endpoint local de login responde 410 AUTH_DELEGATED_TO_KEYCLOAK."
+            "Comprueba en el codigo efectivo del backend que existe la rama de "
+            "POST /api/v1/auth/login que responde 410 con el codigo "
+            "AUTH_DELEGATED_TO_KEYCLOAK, y que la configuracion cargada en el proceso "
+            "tiene ENABLE_LEGACY_AUTH distinto de 1."
         ),
         "asset_ref": "backend-api",
     },
     {
         "id": "BACKEND_ADMIN_REQUIRES_MFA",
-        "title": "La administracion exige MFA",
+        "title": "Las acciones sensibles exigen MFA y son solo de persona",
         "objective": "O1",
         "severity": "high",
         "description": (
-            "Comprueba en la tabla de permisos real del backend que la accion de "
-            "administracion exige MFA y que es una accion exclusiva de persona."
+            "Comprueba en la tabla de permisos real del backend que MANAGE_IDENTITIES, "
+            "RUN_DIAGNOSTICS y MANAGE_ASSETS exigen MFA acreditada (require_mfa=true), "
+            "que las tres estan en HUMAN_ONLY_ACTIONS para que una cuenta de servicio no "
+            "pueda ejecutarlas, y que toda accion declarada en HUMAN_ONLY_ACTIONS exige MFA."
         ),
         "asset_ref": "backend-api",
     },
@@ -191,7 +226,8 @@ CHECKER_CATALOG: List[Dict[str, str]] = [
         "severity": "medium",
         "description": (
             "Compara el checkpoint real con el conteo y el ultimo hash de la cadena, y "
-            "recalcula la firma de anclaje HMAC del checkpoint."
+            "recalcula la firma de anclaje del checkpoint con la misma regla que aplica "
+            "la capa de persistencia (SHA-256 sobre la clave y el par last_hash:total_events)."
         ),
         "asset_ref": "audit-chain",
     },
@@ -278,8 +314,14 @@ def _build(
     evidence_command: str,
     evidence_output: str,
     remediation: str,
+    evidence_source: str = "",
 ) -> CheckResult:
-    """Construye el resultado de un comprobador con los metadatos del catalogo."""
+    """Construye el resultado de un comprobador con los metadatos del catalogo.
+
+    ``evidence_source`` solo se pasa cuando el mecanismo real varia entre
+    ramas del propio comprobador: en ese caso no se puede declarar de antemano
+    en el mapa estatico sin mentir en alguna de las ramas.
+    """
     meta = CHECKER_META[checker_id]
     return CheckResult(
         checker_id=checker_id,
@@ -291,6 +333,7 @@ def _build(
         evidence_command=evidence_command,
         evidence_output=_truncate(evidence_output),
         remediation=remediation,
+        evidence_source=evidence_source,
     )
 
 
@@ -389,6 +432,16 @@ def _admin_reader() -> F11AdminReader:
     return F11AdminReader(base_url, realm, username, password)
 
 
+def _admin_base_url() -> str:
+    """Base URL real de la API de administracion de Keycloak del entorno F11."""
+    return os.environ.get("KEYCLOAK_ADMIN_URL", "http://127.0.0.1:8085").rstrip("/")
+
+
+def _realm_name() -> str:
+    """Nombre real del realm F11."""
+    return os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
+
+
 def _platform_realm_roles() -> List[str]:
     """Devuelve los nombres de rol del realm que equivalen al rol de plataforma del PEP."""
     return sorted(
@@ -401,9 +454,10 @@ def _platform_realm_roles() -> List[str]:
 # --------------------------------------------------------------------------
 def check_kc_pkce_s256() -> CheckResult:
     """Comprueba que el cliente publico exige PKCE S256."""
-    command = "GET /admin/realms/%s/clients?clientId=%s (API de administracion de Keycloak)" % (
-        os.environ.get("KEYCLOAK_REALM", "hospital-lab-local"),
-        PUBLIC_CLIENT_ID,
+    command = (
+        "GET %s/admin/realms/%s/clients y filtrado local por clientId=%s "
+        "(API de administracion de Keycloak)"
+        % (_admin_base_url(), _realm_name(), PUBLIC_CLIENT_ID)
     )
     reader = _admin_reader()
     client = reader.get_client_by_client_id(PUBLIC_CLIENT_ID)
@@ -436,8 +490,10 @@ def check_kc_pkce_s256() -> CheckResult:
 
 def check_kc_registration_disabled() -> CheckResult:
     """Comprueba que el realm no permite autorregistro."""
-    realm_name = os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
-    command = "GET /admin/realms/%s (API de administracion de Keycloak)" % realm_name
+    realm_name = _realm_name()
+    command = "GET %s/admin/realms/%s (API de administracion de Keycloak)" % (
+        _admin_base_url(), realm_name,
+    )
     reader = _admin_reader()
     realm = reader.get_realm()
     if "registrationAllowed" not in realm:
@@ -467,8 +523,10 @@ def check_kc_registration_disabled() -> CheckResult:
 
 def check_kc_password_reset_disabled() -> CheckResult:
     """Comprueba que el realm no permite el restablecimiento de contrasena."""
-    realm_name = os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
-    command = "GET /admin/realms/%s (API de administracion de Keycloak)" % realm_name
+    realm_name = _realm_name()
+    command = "GET %s/admin/realms/%s (API de administracion de Keycloak)" % (
+        _admin_base_url(), realm_name,
+    )
     reader = _admin_reader()
     realm = reader.get_realm()
     if "resetPasswordAllowed" not in realm:
@@ -498,11 +556,12 @@ def check_kc_password_reset_disabled() -> CheckResult:
 
 def check_kc_mfa_on_admin_identities() -> CheckResult:
     """Comprueba que las identidades con rol de plataforma tienen credencial OTP."""
-    realm_name = os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
+    realm_name = _realm_name()
+    base = _admin_base_url()
     command = (
-        "GET /admin/realms/%s/users + GET /admin/realms/%s/users/{id}/role-mappings/realm "
-        "+ GET /admin/realms/%s/users/{id}/credentials (API de administracion de Keycloak)"
-        % (realm_name, realm_name, realm_name)
+        "GET %s/admin/realms/%s/users + GET %s/admin/realms/%s/users/{id}/role-mappings/realm "
+        "+ GET %s/admin/realms/%s/users/{id}/credentials (API de administracion de Keycloak)"
+        % (base, realm_name, base, realm_name, base, realm_name)
     )
     reader = _admin_reader()
     platform_roles = _platform_realm_roles()
@@ -553,10 +612,13 @@ def check_kc_mfa_on_admin_identities() -> CheckResult:
 
 def check_kc_protected_role_not_grantable() -> CheckResult:
     """Comprueba que el rol de plataforma existe y la aplicacion no puede concederlo."""
-    realm_name = os.environ.get("KEYCLOAK_REALM", "hospital-lab-local")
+    realm_name = _realm_name()
     command = (
-        "GET /admin/realms/%s/roles + set_user_roles(<id-inexistente>, [rol-de-plataforma]) "
-        "sobre backend/identity_admin.py" % realm_name
+        "GET %s/admin/realms/%s/roles + llamada real a set_user_roles(<id sintetico>, "
+        "[rol-de-plataforma]) de backend/identity_admin.py con un transporte "
+        "instrumentado que solo permite GET: se comprueba que el rechazo se dispara "
+        "antes de emitir el mapeo de asignacion (ningun POST role-mappings/realm)"
+        % (_admin_base_url(), realm_name)
     )
     reader = _admin_reader()
     realm_roles = reader.list_roles()
@@ -573,20 +635,47 @@ def check_kc_protected_role_not_grantable() -> CheckResult:
             % (realm_name, ", ".join(_platform_realm_roles())),
         )
     protected_in_app = sorted(set(platform_roles) & set(PROTECTED_ROLES))
+    # La sonda no escribe: se instrumenta el transporte del cliente para que
+    # cualquier metodo distinto de GET se registre y falle cerrado. Asi la
+    # comprobacion demuestra que el rechazo ocurre antes del mapeo sin enviar
+    # nunca un POST de asignacion al realm.
+    write_attempts: List[str] = []
+    original_request = reader._request
+
+    def _read_only_request(method, path, payload=None, form=None, authenticated=True):
+        if str(method).upper() != "GET":
+            write_attempts.append("%s %s" % (method, path))
+            raise IdentityAdminError(
+                "la sonda de comprobacion es de solo lectura", status=403,
+                code="IDENTITY_PROTECTED_ROLE",
+            )
+        return original_request(
+            method, path, payload=payload, form=form, authenticated=authenticated,
+        )
+
     denial: Optional[str] = None
+    reader._request = _read_only_request
     try:
         reader.set_user_roles("00000000-0000-0000-0000-000000000000", platform_roles)
     except IdentityAdminError as exc:
         denial = str(exc)
     except Exception as exc:  # pragma: no cover - defensivo
         denial = "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        reader._request = original_request
     output = _json_evidence({
         "roles_del_realm": realm_role_names,
         "roles_de_plataforma_en_el_realm": platform_roles,
         "roles_protegidos_por_la_aplicacion": sorted(PROTECTED_ROLES),
-        "intento_real_de_concesion": denial or "la llamada NO fue rechazada",
+        "intento_de_concesion": denial or "la llamada NO fue rechazada",
+        "mapeos_de_asignacion_emitidos": write_attempts,
     })
-    if protected_in_app and denial and "no se puede conceder" in denial:
+    if (
+        protected_in_app
+        and denial
+        and "no se puede conceder" in denial
+        and not write_attempts
+    ):
         return _build(
             "KC_PROTECTED_ROLE_NOT_GRANTABLE", "passed", command, output,
             "Ninguna: la aplicacion rechaza conceder el rol de plataforma y lo declara "
@@ -602,47 +691,76 @@ def check_kc_protected_role_not_grantable() -> CheckResult:
     return _build(
         "KC_PROTECTED_ROLE_NOT_GRANTABLE", "failed", command, output,
         "Haz que backend/identity_admin.py rechace la concesion del rol de plataforma (%s) "
-        "antes de llamar a la API de Keycloak." % ", ".join(platform_roles),
+        "antes de emitir el mapeo de asignacion: la lectura de roles si se ejecuta, la "
+        "escritura no debe llegar nunca." % ", ".join(platform_roles),
     )
 
 
 # --------------------------------------------------------------------------
 # Comprobadores del backend
 # --------------------------------------------------------------------------
-def _backend_source_lines(relative_path: str, needle: str) -> Tuple[List[str], int]:
-    """Devuelve las lineas del codigo del backend que contienen la cadena buscada."""
+# La rama de rechazo del login local: el estado 410 y el codigo de error van
+# juntos en la misma llamada. Se busca la llamada completa y no la aparicion
+# suelta del literal, que tambien casa con el detalle de un evento de
+# auditoria o con un comentario del fuente.
+DELEGATION_BRANCH_REGEX = re.compile(
+    r"send_json\(\s*410\s*,\s*\{[^{}]*?\"code\"\s*:\s*\"AUTH_DELEGATED_TO_KEYCLOAK\"",
+    re.DOTALL,
+)
+
+
+def _backend_source_text(relative_path: str) -> str:
+    """Lee el codigo fuente efectivo del backend como texto."""
     path = os.path.join(REPO_ROOT, relative_path)
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        lines = handle.read().splitlines()
-    matched = [
-        "%d: %s" % (index + 1, line.strip())
-        for index, line in enumerate(lines)
-        if needle in line
-    ]
-    return matched, len(lines)
+        return handle.read()
 
 
 def check_backend_auth_delegated_to_keycloak() -> CheckResult:
-    """Comprueba que el login local responde 410 AUTH_DELEGATED_TO_KEYCLOAK."""
+    """
+    Comprueba la rama de rechazo 410 del login local y la configuracion efectiva.
+
+    Lo que se comprueba es exactamente esto: que en el codigo efectivo del
+    backend existe la rama de POST /api/v1/auth/login que responde 410 con el
+    codigo AUTH_DELEGATED_TO_KEYCLOAK, y que la configuracion cargada en el
+    proceso no habilita el login local. No se comprueba "que el login local
+    esta deshabilitado" en general: eso lo decidiria una peticion HTTP contra
+    el propio backend, que el servidor de un solo hilo no puede servicing.
+    """
     command = (
-        "grep -n 'AUTH_DELEGATED_TO_KEYCLOAK' backend/server.py + "
-        "ENABLE_LEGACY_AUTH en la configuracion cargada del proceso"
+        "lectura de backend/server.py (rama de POST /api/v1/auth/login que responde 410 "
+        "con el codigo AUTH_DELEGATED_TO_KEYCLOAK) y lectura de la variable "
+        "ENABLE_LEGACY_AUTH del entorno del proceso"
     )
-    matched, total_lines = _backend_source_lines("backend/server.py", "AUTH_DELEGATED_TO_KEYCLOAK")
+    try:
+        source = _backend_source_text("backend/server.py")
+    except OSError as exc:
+        return _build(
+            "BACKEND_AUTH_DELEGATED_TO_KEYCLOAK", "warning", command,
+            _json_evidence({"error": str(exc), "fichero": "backend/server.py"}),
+            "Restaura backend/server.py: sin el codigo efectivo no se puede comprobar "
+            "la rama de rechazo del login local.",
+        )
+    match = DELEGATION_BRANCH_REGEX.search(source)
+    branch = ""
+    if match is not None:
+        line_number = source.count("\n", 0, match.start()) + 1
+        branch = "%d: %s" % (line_number, " ".join(match.group(0).split()))
     legacy_flag = os.environ.get("ENABLE_LEGACY_AUTH", "0")
     legacy_enabled = legacy_flag == "1"
     evidence = {
-        "backend_server_lineas": total_lines,
-        "ocurrencias_de_AUTH_DELEGATED_TO_KEYCLOAK": matched,
+        "fichero": "backend/server.py",
+        "rama_de_rechazo_410_encontrada": match is not None,
+        "rama_de_rechazo_410": branch,
         "ENABLE_LEGACY_AUTH": legacy_flag,
         "nota": (
             "No se ejecuta una peticion HTTP contra el propio backend: el servidor es "
             "http.server de un solo hilo y una peticion a si mismo durante una peticion en "
-            "curso se bloquearia."
+            "curso se bloquearia para siempre."
         ),
     }
     output = _json_evidence(evidence)
-    if not matched:
+    if match is None:
         return _build(
             "BACKEND_AUTH_DELEGATED_TO_KEYCLOAK", "failed", command, output,
             "Devuelve 410 con el codigo AUTH_DELEGATED_TO_KEYCLOAK en el endpoint local "
@@ -656,48 +774,89 @@ def check_backend_auth_delegated_to_keycloak() -> CheckResult:
         )
     return _build(
         "BACKEND_AUTH_DELEGATED_TO_KEYCLOAK", "passed", command, output,
-        "Ninguna: el endpoint local de login esta deshabilitado y devuelve 410 "
-        "AUTH_DELEGATED_TO_KEYCLOAK.",
+        "Ninguna: la rama de rechazo 410 AUTH_DELEGATED_TO_KEYCLOAK existe en el codigo "
+        "efectivo y el proceso no habilita el login local.",
     )
 
 
 def check_backend_admin_requires_mfa() -> CheckResult:
-    """Comprueba que la accion de administracion exige MFA y es solo de persona."""
+    """
+    Comprueba que las acciones sensibles exigen MFA y son solo de persona.
+
+    Lo que se comprueba es exactamente esto:
+
+    * Las tres acciones sensibles de la plataforma (MANAGE_IDENTITIES,
+      RUN_DIAGNOSTICS y MANAGE_ASSETS) existen en la tabla de permisos y
+      declaran ``require_mfa: true``.
+    * Las tres estan en HUMAN_ONLY_ACTIONS, de modo que una cuenta de servicio
+      no pueda ejecutarlas.
+    * Toda accion declarada en HUMAN_ONLY_ACTIONS exige MFA: si alguien
+      anade una accion de escritura nueva, esta comprobacion lo detecta.
+    """
     command = (
-        "python3 -c \"from jwt_validator import CLINICAL_PERMISSIONS, HUMAN_ONLY_ACTIONS; "
-        "print(CLINICAL_PERMISSIONS['MANAGE_IDENTITIES']); print(sorted(HUMAN_ONLY_ACTIONS))\""
+        "lectura de la tabla CLINICAL_PERMISSIONS y del conjunto HUMAN_ONLY_ACTIONS "
+        "del modulo backend/jwt_validator.py cargado en el proceso"
     )
-    policy = CLINICAL_PERMISSIONS.get("MANAGE_IDENTITIES")
-    if policy is None:
-        return _build(
-            "BACKEND_ADMIN_REQUIRES_MFA", "failed", command,
-            _json_evidence({"CLINICAL_PERMISSIONS": sorted(CLINICAL_PERMISSIONS.keys())}),
-            "Declara la accion MANAGE_IDENTITIES en CLINICAL_PERMISSIONS con require_mfa=true.",
-        )
-    require_mfa = bool(policy.get("require_mfa"))
-    human_only = "MANAGE_IDENTITIES" in HUMAN_ONLY_ACTIONS
-    output = _json_evidence({
-        "politica_MANAGE_IDENTITIES": {
+    sensitive_actions = ("MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS")
+    policies: Dict[str, Any] = {}
+    missing_policy: List[str] = []
+    without_mfa: List[str] = []
+    for action in sensitive_actions:
+        policy = CLINICAL_PERMISSIONS.get(action)
+        if policy is None:
+            missing_policy.append(action)
+            continue
+        policies[action] = {
             "required_roles": sorted(policy.get("required_roles") or []),
-            "require_mfa": require_mfa,
+            "require_mfa": bool(policy.get("require_mfa")),
             "description": policy.get("description"),
-        },
-        "HUMAN_ONLY_ACTIONS": sorted(HUMAN_ONLY_ACTIONS),
+        }
+        if not policy.get("require_mfa"):
+            without_mfa.append(action)
+    human_only = sorted(HUMAN_ONLY_ACTIONS)
+    not_human_only = [action for action in sensitive_actions if action not in HUMAN_ONLY_ACTIONS]
+    human_only_without_mfa = sorted(
+        action for action in HUMAN_ONLY_ACTIONS
+        if not bool((CLINICAL_PERMISSIONS.get(action) or {}).get("require_mfa"))
+    )
+    output = _json_evidence({
+        "acciones_sensibles": list(sensitive_actions),
+        "politicas": policies,
+        "acciones_sin_politica": missing_policy,
+        "acciones_sin_mfa": without_mfa,
+        "acciones_sensibles_fuera_de_HUMAN_ONLY_ACTIONS": not_human_only,
+        "HUMAN_ONLY_ACTIONS": human_only,
+        "acciones_de_HUMAN_ONLY_ACTIONS_sin_mfa": human_only_without_mfa,
     })
-    if require_mfa and human_only:
-        return _build(
-            "BACKEND_ADMIN_REQUIRES_MFA", "passed", command, output,
-            "Ninguna: la administracion exige MFA acreditado y queda reservada a personas.",
-        )
-    if not require_mfa:
+    if missing_policy:
         return _build(
             "BACKEND_ADMIN_REQUIRES_MFA", "failed", command, output,
-            "Marca require_mfa=true en la politica MANAGE_IDENTITIES de backend/jwt_validator.py.",
+            "Declara las acciones %s en CLINICAL_PERMISSIONS de backend/jwt_validator.py "
+            "con require_mfa=true." % ", ".join(missing_policy),
+        )
+    if without_mfa:
+        return _build(
+            "BACKEND_ADMIN_REQUIRES_MFA", "failed", command, output,
+            "Marca require_mfa=true en la politica de las acciones %s de "
+            "backend/jwt_validator.py: son operaciones sensibles." % ", ".join(without_mfa),
+        )
+    if not_human_only:
+        return _build(
+            "BACKEND_ADMIN_REQUIRES_MFA", "failed", command, output,
+            "Anade %s a HUMAN_ONLY_ACTIONS en backend/jwt_validator.py: las cuentas de "
+            "servicio no pueden ejecutar esas acciones." % ", ".join(not_human_only),
+        )
+    if human_only_without_mfa:
+        return _build(
+            "BACKEND_ADMIN_REQUIRES_MFA", "failed", command, output,
+            "Marca require_mfa=true en las acciones %s de HUMAN_ONLY_ACTIONS: una accion "
+            "reservada a personas tiene que exigir MFA."
+            % ", ".join(human_only_without_mfa),
         )
     return _build(
-        "BACKEND_ADMIN_REQUIRES_MFA", "failed", command, output,
-        "Anade MANAGE_IDENTITIES a HUMAN_ONLY_ACTIONS en backend/jwt_validator.py: las "
-        "cuentas de servicio no pueden administrar identidades.",
+        "BACKEND_ADMIN_REQUIRES_MFA", "passed", command, output,
+        "Ninguna: las tres acciones sensibles exigen MFA acreditada y quedan reservadas "
+        "a personas.",
     )
 
 
@@ -849,7 +1008,7 @@ def check_backend_audit_checkpoint_consistent() -> CheckResult:
     if computed_anchor is None:
         problems.append("no se pudo resolver la clave de anclaje para recalcular la firma")
     elif checkpoint["anchor_signature"] != computed_anchor:
-        problems.append("la firma de anclaje HMAC del checkpoint no coincide con el recalculo")
+        problems.append("la firma de anclaje del checkpoint no coincide con el recalculo")
     output = _json_evidence({
         "base_de_datos": path,
         "checkpoint": {
@@ -904,7 +1063,8 @@ def check_frontend_bundle_has_no_password_field() -> CheckResult:
     bundle_dir = _frontend_bundle_dir()
     pattern_literal = "|".join(PASSWORD_FIELD_PATTERNS)
     command = (
-        "grep -nE '%s' frontend/.f11-dist/browser/*.js" % pattern_literal
+        "lectura de los ficheros .js de frontend/.f11-dist/browser y busqueda del patron "
+        "'%s' en su contenido" % pattern_literal
     )
     if os.path.isdir(bundle_dir):
         origin = "frontend/.f11-dist/browser"
@@ -917,6 +1077,7 @@ def check_frontend_bundle_has_no_password_field() -> CheckResult:
                 "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD", "warning", command,
                 _json_evidence({"directorio": origin, "ficheros_js": 0}),
                 "Reconstruye el bundle Angular del F11: no hay ficheros JavaScript que revisar.",
+                evidence_source="filesystem",
             )
         matches: List[Dict[str, str]] = []
         for path in files:
@@ -934,16 +1095,18 @@ def check_frontend_bundle_has_no_password_field() -> CheckResult:
                 "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD", "failed", command, output,
                 "Elimina del bundle Angular el campo de contrasena: el formulario de "
                 "credenciales vive en Keycloak y la aplicacion solo hace traspaso.",
+                evidence_source="filesystem",
             )
         return _build(
             "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD", "passed", command, output,
             "Ninguna: los %d ficheros JavaScript publicados no contienen ningun campo de "
             "contrasena." % len(files),
+            evidence_source="filesystem",
         )
     # El bundle no esta en el arbol: se mira el contenedor que lo sirve.
     fallback_command = (
-        "docker exec %s sh -c \"cat /usr/share/caddy/*.js\" | grep -nE '%s'"
-        % (F11_FRONTEND_CONTAINER, pattern_literal)
+        "docker exec %s sh -c 'cat /usr/share/caddy/*.js' y busqueda del patron '%s' "
+        "en el contenido leido" % (F11_FRONTEND_CONTAINER, pattern_literal)
     )
     code, stdout, stderr = _run_command(
         ["docker", "exec", F11_FRONTEND_CONTAINER, "sh", "-c", "cat /usr/share/caddy/*.js"],
@@ -959,6 +1122,7 @@ def check_frontend_bundle_has_no_password_field() -> CheckResult:
             }),
             "Publica el bundle Angular del F11 o levanta el contenedor %s para poder "
             "comprobarlo." % F11_FRONTEND_CONTAINER,
+            evidence_source="docker_exec",
         )
     matches = _scan_bundle_content(stdout, F11_FRONTEND_CONTAINER)
     output = _json_evidence({
@@ -972,10 +1136,12 @@ def check_frontend_bundle_has_no_password_field() -> CheckResult:
             "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD", "failed", fallback_command, output,
             "Elimina del bundle Angular el campo de contrasena: el formulario de "
             "credenciales vive en Keycloak y la aplicacion solo hace traspaso.",
+            evidence_source="docker_exec",
         )
     return _build(
         "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD", "passed", fallback_command, output,
         "Ninguna: el bundle servido por el contenedor no contiene ningun campo de contrasena.",
+        evidence_source="docker_exec",
     )
 
 
@@ -1049,10 +1215,10 @@ def check_container_hardening() -> CheckResult:
     """Comprueba el endurecimiento de contenedores declarado y en ejecucion."""
     compose_path = os.path.join(REPO_ROOT, "infra", "f11", "compose.yaml")
     command = (
-        "python3 -c \"import security_diagnostics as sd; "
-        "print(sd._parse_compose_services('infra/f11/compose.yaml'))\" + "
+        "lectura de la seccion services de infra/f11/compose.yaml y "
         "docker inspect %s %s --format '{{.Name}} privileged={{.HostConfig.Privileged}} "
-        "cap_drop={{.HostConfig.CapDrop}} security_opt={{.HostConfig.SecurityOpt}}'"
+        "cap_drop={{.HostConfig.CapDrop}} cap_add={{.HostConfig.CapAdd}} "
+        "security_opt={{.HostConfig.SecurityOpt}}'"
         % (F11_KEYCLOAK_CONTAINER, F11_FRONTEND_CONTAINER)
     )
     if not os.path.exists(compose_path):
@@ -1143,7 +1309,10 @@ def check_data_files_owner_only() -> CheckResult:
         path + "-shm",
         path + ".anchor-key",
     ]
-    command = "stat -c '%%a %%U:%%G %%n' %s" % " ".join(artifacts)
+    command = (
+        "consulta de los permisos de los ficheros %s con os.stat (modo esperado 0600)"
+        % " ".join(artifacts)
+    )
     existing = [artifact for artifact in artifacts if os.path.exists(artifact)]
     if not existing:
         return _build(
@@ -1209,11 +1378,17 @@ def run_checks(checker_ids: Optional[List[str]] = None) -> List[CheckResult]:
     """
     Ejecuta los comprobadores y devuelve sus resultados con la evidencia real.
 
-    Si se indica una lista de identificadores, solo se ejecutan esos. Una
-    excepcion en un comprobador se convierte en un resultado ``warning`` con el
-    detalle real de la excepcion: nunca se convierte en un ``passed``.
+    ``checker_ids`` distingue tres casos, porque en Python una lista vacia es
+    *falsy* y no puede usarse como sinonimo de "todos":
+
+    * ``None`` (o ausente): se ejecuta el catalogo completo.
+    * ``[]``: no se ejecuta ningun comprobador (una ejecucion con cero).
+    * Una lista no vacia: se ejecutan solo esos comprobadores.
+
+    Una excepcion en un comprobador se convierte en un resultado ``warning``
+    con el detalle real de la excepcion: nunca se convierte en un ``passed``.
     """
-    wanted = set(checker_ids) if checker_ids else None
+    wanted = set(checker_ids) if checker_ids is not None else None
     results: List[CheckResult] = []
     for checker in CHECKERS:
         checker_id = CHECKER_BY_FUNCTION.get(checker.__name__)
@@ -1224,7 +1399,10 @@ def run_checks(checker_ids: Optional[List[str]] = None) -> List[CheckResult]:
         if wanted is not None and checker_id not in wanted:
             continue
         try:
-            results.append(checker())
+            result = checker()
+            if not result.evidence_source:
+                result.evidence_source = EVIDENCE_SOURCES.get(result.checker_id, "in_process")
+            results.append(result)
         except Exception as exc:
             meta = CHECKER_META[checker_id]
             results.append(CheckResult(
@@ -1234,9 +1412,10 @@ def run_checks(checker_ids: Optional[List[str]] = None) -> List[CheckResult]:
                 severity=meta["severity"],
                 status="warning",
                 asset_ref=meta["asset_ref"],
+                evidence_source=EVIDENCE_SOURCES.get(checker_id, "in_process"),
                 evidence_command=(
-                    "python3 -c \"import security_diagnostics as sd; "
-                    "sd.run_checks(['%s'])\"" % checker_id
+                    "llamada a la funcion check_%s() del modulo backend/security_diagnostics.py "
+                    "en el proceso" % checker_id.lower()
                 ),
                 evidence_output=_truncate(
                     "El comprobador %s no pudo obtener evidencia: %s: %s"

@@ -15,12 +15,14 @@ Reglas del modulo:
   cuando no: no se inventa una version.
 * Los activos que guardan datos del laboratorio son sinteticos y se marcan con
   ``synthetic=1``. El resto es infraestructura (``synthetic=0``).
-* La semilla es idempotente: si el activo ya existe no se duplica ni se
-  sobrescribe.
+* La siembra es idempotente y queda auditada: se ejecuta una sola vez, los
+  activos y su evento ``ASSET_SEED`` se escriben en la misma transaccion y el
+  backend no arranca si la siembra falla (fail-closed).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -38,12 +40,15 @@ from database import (
     ASSET_CLASSIFICATIONS,
     ASSET_CRITICALITIES,
     ASSET_SOURCES,
-    AssetAlreadyExistsError,
     F11_ENVIRONMENT,
+    validate_asset_name,
 )
 
 F11_FRONTEND_CONTAINER = "sgsi-zta-f11-frontend"
 F11_KEYCLOAK_CONTAINER = "sgsi-zta-f11-keycloak"
+
+# Accion de auditoria que deja constancia de la siembra del inventario.
+SEED_AUDIT_ACTION = "ASSET_SEED"
 
 
 # --------------------------------------------------------------------------
@@ -420,7 +425,7 @@ SEED_CATALOG: List[Dict[str, Any]] = [
 
 
 # --------------------------------------------------------------------------
-# Siembra idempotente
+# Siembra idempotente, atomica y auditada
 # --------------------------------------------------------------------------
 def build_asset_payload(entry: Dict[str, Any]) -> Dict[str, Any]:
     """Construye el registro persistible de un activo del catalogo semilla."""
@@ -444,36 +449,92 @@ def build_asset_payload(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def seed_asset_id(name: str) -> str:
+    """
+    Identificador estable de un activo del catalogo semilla.
+
+    Es determinista a proposito: la identidad del activo sembrado no depende
+    del arranque. Si un administrador renombra un activo por la API, su
+    identificador no cambia y la siembra no lo vuelve a insertar con el
+    nombre original.
+    """
+    digest = hashlib.sha256(("f11-seed:" + name).encode("utf-8")).hexdigest()[:8].upper()
+    return "AST-" + digest
+
+
 def seed_catalog(db: Any) -> Dict[str, Any]:
     """
-    Inserta el catalogo semilla del F11 de forma idempotente.
+    Inserta el catalogo semilla del F11 de forma idempotente, atomica y auditada.
 
-    Un activo que ya existe no se duplica ni se sobrescribe: el inventario
-    refleja lo que hay, y una correccion posterior se hace por la API de
-    actualizacion, que incrementa la revision y queda auditada.
+    Reglas de la siembra:
+
+    * Idempotencia por identidad, no solo por nombre: cada activo del
+      catalogo tiene un identificador estable (``seed_asset_id``), de modo que
+      un activo renombrado por la API no se reinserta con el nombre original
+      en el siguiente arranque.
+    * La siembra se ejecuta UNA sola vez: cuando la cadena de auditoria ya
+      tiene un evento ``ASSET_SEED``, el arranque no vuelve a tocar el
+      inventario. Un activo renombrado o corregido despues se queda como
+      esta: el inventario refleja lo que hay y su correccion se hace por la
+      API, que queda auditada.
+    * Atomicidad: los activos y el evento ``ASSET_SEED`` se escriben en la
+      misma transaccion. Si la siembra falla no queda ni un activo a medias ni
+      un evento que diga lo contrario, y el backend no arranca (fail-closed).
     """
-    existing = {asset.get("name"): asset for asset in db.list_assets()}
-    created: List[str] = []
+    existing = db.list_assets()
+    existing_names = {str(asset.get("name") or "") for asset in existing}
+    existing_ids = {str(asset.get("id") or "") for asset in existing}
+
+    if db.count_audit_events_by_action(SEED_AUDIT_ACTION) > 0:
+        # La siembra ya se hizo y quedo auditada: el arranque no vuelve a
+        # tocar el inventario. Es lo que evita que un activo renombrado por la
+        # API reaparezca con su nombre original.
+        return {
+            "created": [],
+            "skipped": sorted(existing_names),
+            "total_catalog": len(SEED_CATALOG),
+            "environment": F11_ENVIRONMENT,
+            "already_seeded": True,
+        }
+
+    pending: List[Dict[str, Any]] = []
     skipped: List[str] = []
     for entry in SEED_CATALOG:
-        if entry["name"] in existing:
+        asset_id = seed_asset_id(entry["name"])
+        if entry["name"] in existing_names or asset_id in existing_ids:
+            # El activo ya esta (con su nombre o renombrado): no se duplica ni
+            # se sobrescribe.
             skipped.append(entry["name"])
             continue
+        pending.append(entry)
+
+    payloads: List[Dict[str, Any]] = []
+    for entry in pending:
         payload = build_asset_payload(entry)
-        payload["id"] = "AST-" + os.urandom(4).hex().upper()
+        payload["id"] = seed_asset_id(entry["name"])
         payload["revision"] = 1
-        try:
-            db.insert_asset(payload)
-            created.append(entry["name"])
-        except AssetAlreadyExistsError:
-            # Carrera con otro arranque: el activo ya existe y no se duplica.
-            skipped.append(entry["name"])
-            continue
+        payloads.append(payload)
+
+    audit_event = {
+        "action": SEED_AUDIT_ACTION,
+        "actor": "SYSTEM",
+        "role": "NONE",
+        "status": "ALLOWED",
+        "details": (
+            "Siembra del inventario de activos del entorno %s: %d activos creados, "
+            "%d ya existentes (catalogo de %d activos)"
+            % (F11_ENVIRONMENT, len(payloads), len(skipped), len(SEED_CATALOG))
+        ),
+        "ip": "127.0.0.1",
+        "mfa_verified": False,
+    }
+    created, _record = db.insert_assets_with_audit_event(payloads, audit_event)
     return {
         "created": created,
         "skipped": skipped,
         "total_catalog": len(SEED_CATALOG),
         "environment": F11_ENVIRONMENT,
+        "already_seeded": False,
     }
 
 
@@ -497,14 +558,11 @@ def validate_asset(payload: Dict[str, Any], partial: bool = False) -> List[str]:
 
     if not present("name"):
         name = str(payload.get("name") or "").strip()
-        if not name:
-            errors.append("name: el nombre del activo es obligatorio")
-        elif not 3 <= len(name) <= 80:
-            errors.append("name: el nombre debe tener entre 3 y 80 caracteres")
-        elif not all(char.isalnum() or char in "-_." for char in name):
-            errors.append(
-                "name: el nombre solo admite letras, digitos, guion, guion bajo y punto"
-            )
+        # Misma regla y mismo mensaje que aplica la capa de persistencia:
+        # la regla vive en backend/database.py y aqui solo se reutiliza.
+        name_error = validate_asset_name(name)
+        if name_error:
+            errors.append("name: %s" % name_error)
 
     if not present("classification"):
         classification = str(payload.get("classification") or "").strip()

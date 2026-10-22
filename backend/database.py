@@ -23,7 +23,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ZERO_HASH = "0" * 64
 
 # Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
@@ -36,6 +36,38 @@ F11_ENVIRONMENT = "f11-local"
 ASSET_CLASSIFICATIONS = ("container", "service", "dataset", "identity_store", "code", "configuration")
 ASSET_CRITICALITIES = ("critical", "high", "medium", "low")
 ASSET_SOURCES = ("compose", "runtime", "manual")
+
+# Regla del nombre de un activo. Vive en la capa de persistencia porque es la
+# capa inferior: la API la reutiliza en lugar de duplicarla, de modo que un
+# escritor que no pase por el handler HTTP (un script, una importacion) no
+# puede meter comillas, espacios ni caracteres de control en assets.name.
+ASSET_NAME_MIN_LENGTH = 3
+ASSET_NAME_MAX_LENGTH = 80
+ASSET_NAME_ALLOWED_CHARACTERS = "-_."
+
+# Campos del activo que admiten null con significado propio: null en 'version'
+# significa "borra la version". En el resto de campos, un null no borra nada:
+# se conserva el valor vigente.
+NULLABLE_ASSET_FIELDS = ("version",)
+
+
+def validate_asset_name(name: str) -> Optional[str]:
+    """
+    Aplica la regla de nombre de activo y devuelve el motivo, o None si es valido.
+
+    Misma regla y mismo mensaje en las dos capas (persistencia y API): el
+    nombre no puede estar vacio, su longitud esta entre 3 y 80 caracteres y
+    solo admite letras, digitos, guion, guion bajo y punto.
+    """
+    if not name:
+        return "el nombre del activo es obligatorio"
+    if not ASSET_NAME_MIN_LENGTH <= len(name) <= ASSET_NAME_MAX_LENGTH:
+        return "el nombre debe tener entre %d y %d caracteres" % (
+            ASSET_NAME_MIN_LENGTH, ASSET_NAME_MAX_LENGTH,
+        )
+    if not all(char.isalnum() or char in ASSET_NAME_ALLOWED_CHARACTERS for char in name):
+        return "el nombre solo admite letras, digitos, guion, guion bajo y punto"
+    return None
 
 
 class DatabaseError(Exception):
@@ -409,6 +441,18 @@ class ClinicalDatabaseManager:
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_asset_evaluations_asset ON asset_evaluations(asset_id);")
 
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (3, datetime('now'));")
+
+                if current_ver < 4:
+                    # Migracion 4: origen real de la evidencia de cada hallazgo.
+                    # El mecanismo (API de Keycloak, ficheros, SQLite, docker
+                    # inspect, proceso) viaja con el hallazgo: la evidencia es
+                    # reconstruible y no depende de leer el codigo del comprobador.
+                    columnas = {fila[1] for fila in cur.execute("PRAGMA table_info(security_findings);")}
+                    if "evidence_source" not in columnas:
+                        cur.execute(
+                            "ALTER TABLE security_findings ADD COLUMN evidence_source TEXT NOT NULL DEFAULT '';"
+                        )
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (4, datetime('now'));")
 
                 cur.execute("COMMIT;")
             except Exception as e:
@@ -903,8 +947,8 @@ class ClinicalDatabaseManager:
         cur.execute("""
             INSERT INTO security_findings (
                 id, run_id, checker_id, title, objective, severity, status, asset_ref,
-                evidence_command, evidence_output, remediation, detected_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                evidence_command, evidence_output, evidence_source, remediation, detected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             finding_id,
             run_id,
@@ -916,6 +960,7 @@ class ClinicalDatabaseManager:
             finding.get("asset_ref"),
             str(finding.get("evidence_command") or ""),
             str(finding.get("evidence_output") or ""),
+            str(finding.get("evidence_source") or ""),
             str(finding.get("remediation") or ""),
             float(finding.get("detected_at") or time.time()),
         ))
@@ -1084,8 +1129,12 @@ class ClinicalDatabaseManager:
         if not asset_id:
             raise DatabaseError("El identificador del activo es obligatorio.")
         name = str(asset.get("name") or "").strip()
-        if not name:
-            raise AssetValidationError("El nombre del activo es obligatorio.")
+        # La persistencia aplica la misma regla de nombre que la API: un
+        # escritor que no pase por el handler HTTP no puede meter comillas,
+        # espacios ni caracteres de control en el nombre.
+        name_error = validate_asset_name(name)
+        if name_error:
+            raise AssetValidationError(name_error)
         self._validate_asset_fields(asset)
         now = time.time()
         cur.execute(
@@ -1127,60 +1176,143 @@ class ClinicalDatabaseManager:
         """Alta de un activo en el inventario, con validacion del vocabulario cerrado."""
         return self._run_simple_write(lambda cur: self._insert_asset_cursor(cur, asset))
 
-    def update_asset(self, asset_id: str, changes: Dict[str, Any]) -> Dict[str, Any]:
-        """Actualiza los campos modificables de un activo e incrementa su revision."""
-        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
-            cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
-            row = cur.fetchone()
-            if row is None:
-                raise AssetNotFoundError("El activo '%s' no existe en el inventario." % asset_id)
-            current = dict(row)
-            merged = dict(current)
-            for field in (
-                "name", "classification", "criticality", "owner", "source",
-                "version", "environment", "synthetic", "description",
-            ):
-                if field in changes and changes[field] is not None:
-                    merged[field] = changes[field]
-            merged["synthetic"] = 1 if int(merged.get("synthetic") or 0) else 0
-            self._validate_asset_fields(merged)
-            merged["revision"] = int(current.get("revision") or 1) + 1
-            merged["updated_at"] = time.time()
-            if merged["name"] != current["name"]:
-                cur.execute("SELECT id FROM assets WHERE name = ?;", (merged["name"],))
-                if cur.fetchone() is not None:
-                    raise AssetAlreadyExistsError(
-                        "Ya existe un activo registrado con el nombre '%s'." % merged["name"]
-                    )
-            try:
-                cur.execute("""
-                    UPDATE assets SET
-                        name = ?, classification = ?, criticality = ?, owner = ?, source = ?,
-                        version = ?, environment = ?, synthetic = ?, description = ?,
-                        updated_at = ?, revision = ?
-                    WHERE id = ?;
-                """, (
-                    merged["name"],
-                    merged["classification"],
-                    merged["criticality"],
-                    merged["owner"],
-                    merged["source"],
-                    merged.get("version"),
-                    merged["environment"],
-                    merged["synthetic"],
-                    merged["description"],
-                    merged["updated_at"],
-                    merged["revision"],
-                    asset_id,
-                ))
-            except sqlite3.IntegrityError as exc:
+    def insert_assets_with_audit_event(
+        self,
+        assets: List[Dict[str, Any]],
+        audit_event: Dict[str, Any],
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        """
+        Inserta un lote de activos y su evento de auditoria en una sola transaccion.
+
+        Es la via que usa la siembra del inventario (M3): o se escriben todos los
+        activos y queda el evento en la cadena de auditoria, o no queda ninguno
+        de los dos. Nunca queda un inventario a medias con un evento que lo
+        dice completo.
+        """
+        def operation(cur: sqlite3.Cursor) -> List[str]:
+            created: List[str] = []
+            for asset in assets:
+                self._insert_asset_cursor(cur, asset)
+                created.append(str(asset.get("name") or ""))
+            return created
+
+        created, record = self.run_clinical_transaction(operation, audit_event)
+        return created, record
+
+    def insert_asset_with_audit_event(
+        self,
+        asset: Dict[str, Any],
+        audit_event: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Da de alta un activo y registra su evento de auditoria en una sola transaccion.
+
+        Es la via que usan las rutas de escritura de la API (M3): o quedan el
+        activo y su evento, o no queda ninguno de los dos. La respuesta 201
+        nunca puede confirmar un activo que la cadena de auditoria no conoce.
+        """
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_asset_cursor(cur, asset),
+            audit_event,
+        )
+
+    def _update_asset_cursor(
+        self,
+        cur: sqlite3.Cursor,
+        asset_id: str,
+        changes: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Actualiza un activo en una transaccion ya abierta."""
+        cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise AssetNotFoundError("El activo '%s' no existe en el inventario." % asset_id)
+        current = dict(row)
+        merged = dict(current)
+        for field in (
+            "name", "classification", "criticality", "owner", "source",
+            "version", "environment", "synthetic", "description",
+        ):
+            if field not in changes:
+                # Campo no enviado: se conserva el valor vigente.
+                continue
+            value = changes[field]
+            if value is None and field not in NULLABLE_ASSET_FIELDS:
+                # Null en un campo obligatorio no borra nada: se conserva el
+                # valor vigente. El campo 'version' si admite null y su
+                # borrado es explicito (ver NULLABLE_ASSET_FIELDS).
+                continue
+            merged[field] = value
+        merged["synthetic"] = 1 if int(merged.get("synthetic") or 0) else 0
+        self._validate_asset_fields(merged)
+        name_error = validate_asset_name(str(merged.get("name") or "").strip())
+        if name_error:
+            raise AssetValidationError(name_error)
+        merged["revision"] = int(current.get("revision") or 1) + 1
+        merged["updated_at"] = time.time()
+        if merged["name"] != current["name"]:
+            cur.execute("SELECT id FROM assets WHERE name = ?;", (merged["name"],))
+            if cur.fetchone() is not None:
                 raise AssetAlreadyExistsError(
                     "Ya existe un activo registrado con el nombre '%s'." % merged["name"]
-                ) from exc
-            cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
-            updated = cur.fetchone()
-            return dict(updated) if updated is not None else merged
-        return self._run_simple_write(operation)
+                )
+        try:
+            cur.execute("""
+                UPDATE assets SET
+                    name = ?, classification = ?, criticality = ?, owner = ?, source = ?,
+                    version = ?, environment = ?, synthetic = ?, description = ?,
+                    updated_at = ?, revision = ?
+                WHERE id = ?;
+            """, (
+                merged["name"],
+                merged["classification"],
+                merged["criticality"],
+                merged["owner"],
+                merged["source"],
+                merged.get("version"),
+                merged["environment"],
+                merged["synthetic"],
+                merged["description"],
+                merged["updated_at"],
+                merged["revision"],
+                asset_id,
+            ))
+        except sqlite3.IntegrityError as exc:
+            raise AssetAlreadyExistsError(
+                "Ya existe un activo registrado con el nombre '%s'." % merged["name"]
+            ) from exc
+        cur.execute("SELECT * FROM assets WHERE id = ?;", (asset_id,))
+        updated = cur.fetchone()
+        return dict(updated) if updated is not None else merged
+
+    def update_asset(self, asset_id: str, changes: Dict[str, Any]) -> Dict[str, Any]:
+        """Actualiza los campos modificables de un activo e incrementa su revision."""
+        return self._run_simple_write(
+            lambda cur: self._update_asset_cursor(cur, asset_id, changes)
+        )
+
+    def update_asset_with_audit_event(
+        self,
+        asset_id: str,
+        changes: Dict[str, Any],
+        audit_event: Dict[str, Any],
+        details_builder: Optional[Callable[[Dict[str, Any]], str]] = None,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Actualiza un activo y registra su auditoria en la misma transaccion.
+
+        ``details_builder`` permite describir el resultado real (por ejemplo,
+        la revision ya incrementada) sin calcularlo fuera de la transaccion.
+        """
+        event = dict(audit_event)
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            updated = self._update_asset_cursor(cur, asset_id, changes)
+            if details_builder is not None:
+                event["details"] = details_builder(updated)
+            return updated
+
+        updated, record = self.run_clinical_transaction(operation, event)
+        return updated, record
 
     def get_asset(self, asset_id: str) -> Optional[Dict[str, Any]]:
         """Recupera un activo del inventario por su identificador."""
@@ -1229,41 +1361,65 @@ class ClinicalDatabaseManager:
             except Exception as e:
                 raise DatabaseError(f"Error al listar activos en {self.db_path}: {e}")
 
+    def _insert_asset_evaluation_cursor(
+        self,
+        cur: sqlite3.Cursor,
+        evaluation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Registra una evaluacion de activo en una transaccion ya abierta."""
+        evaluation_id = str(evaluation.get("id") or "").strip()
+        if not evaluation_id:
+            raise DatabaseError("El identificador de la evaluacion es obligatorio.")
+        asset_id = str(evaluation.get("asset_id") or "").strip()
+        if not asset_id:
+            raise DatabaseError("La evaluacion debe referenciar un activo (asset_id).")
+        criticality = str(evaluation.get("criticality") or "").strip()
+        if criticality not in ASSET_CRITICALITIES:
+            raise AssetValidationError(
+                "Criticidad de evaluacion no admitida: '%s'. Valores validos: %s."
+                % (criticality, ", ".join(ASSET_CRITICALITIES))
+            )
+        cur.execute("SELECT id FROM assets WHERE id = ?;", (asset_id,))
+        if cur.fetchone() is None:
+            raise AssetNotFoundError("El activo '%s' no existe en el inventario." % asset_id)
+        cur.execute("""
+            INSERT INTO asset_evaluations (
+                id, asset_id, evaluated_at, evaluated_by, criticality, notes, findings_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+        """, (
+            evaluation_id,
+            asset_id,
+            float(evaluation.get("evaluated_at") or time.time()),
+            str(evaluation.get("evaluated_by") or "unknown"),
+            criticality,
+            str(evaluation.get("notes") or ""),
+            int(evaluation.get("findings_count") or 0),
+        ))
+        cur.execute("SELECT * FROM asset_evaluations WHERE id = ?;", (evaluation_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else {"id": evaluation_id}
+
     def insert_asset_evaluation(self, evaluation: Dict[str, Any]) -> Dict[str, Any]:
         """Registra la evaluacion de criticidad de un activo."""
-        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
-            evaluation_id = str(evaluation.get("id") or "").strip()
-            if not evaluation_id:
-                raise DatabaseError("El identificador de la evaluacion es obligatorio.")
-            asset_id = str(evaluation.get("asset_id") or "").strip()
-            if not asset_id:
-                raise DatabaseError("La evaluacion debe referenciar un activo (asset_id).")
-            criticality = str(evaluation.get("criticality") or "").strip()
-            if criticality not in ASSET_CRITICALITIES:
-                raise AssetValidationError(
-                    "Criticidad de evaluacion no admitida: '%s'. Valores validos: %s."
-                    % (criticality, ", ".join(ASSET_CRITICALITIES))
-                )
-            cur.execute("SELECT id FROM assets WHERE id = ?;", (asset_id,))
-            if cur.fetchone() is None:
-                raise AssetNotFoundError("El activo '%s' no existe en el inventario." % asset_id)
-            cur.execute("""
-                INSERT INTO asset_evaluations (
-                    id, asset_id, evaluated_at, evaluated_by, criticality, notes, findings_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?);
-            """, (
-                evaluation_id,
-                asset_id,
-                float(evaluation.get("evaluated_at") or time.time()),
-                str(evaluation.get("evaluated_by") or "unknown"),
-                criticality,
-                str(evaluation.get("notes") or ""),
-                int(evaluation.get("findings_count") or 0),
-            ))
-            cur.execute("SELECT * FROM asset_evaluations WHERE id = ?;", (evaluation_id,))
-            row = cur.fetchone()
-            return dict(row) if row is not None else {"id": evaluation_id}
-        return self._run_simple_write(operation)
+        return self._run_simple_write(
+            lambda cur: self._insert_asset_evaluation_cursor(cur, evaluation)
+        )
+
+    def insert_asset_evaluation_with_audit_event(
+        self,
+        evaluation: Dict[str, Any],
+        audit_event: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Registra una evaluacion y su evento de auditoria en una sola transaccion.
+
+        La evaluacion no puede quedar guardada sin el evento que la declara, ni
+        el evento sin la evaluacion que dice haber registrado.
+        """
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_asset_evaluation_cursor(cur, evaluation),
+            audit_event,
+        )
 
     def list_asset_evaluations(self, asset_id: str) -> List[Dict[str, Any]]:
         """Lista las evaluaciones registradas para un activo."""
@@ -1352,6 +1508,20 @@ class ClinicalDatabaseManager:
         """Devuelve el último hash de la cadena de auditoría."""
         with self._lock:
             return self._last_audit_hash
+
+    def count_audit_events_by_action(self, action: str) -> int:
+        """Cuenta los eventos de auditoria que declaran una accion concreta."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute(
+                    "SELECT COUNT(*) FROM audit_events WHERE action = ?;", (action,)
+                )
+                count = int(cur.fetchone()[0])
+                cur.close()
+                return count
+            except Exception as e:
+                raise DatabaseError(f"Error al contar eventos de auditoría en {self.db_path}: {e}")
 
     def verify_chain_integrity(self) -> Tuple[bool, Optional[str]]:
         """Verifica la integridad de la cadena de bloques completa y su checkpoint."""

@@ -90,6 +90,12 @@ from jwt_validator import (
 # Cadena de auditoría: hash inicial canónico
 ZERO_HASH = "0" * 64
 
+# Marcador de un cuerpo POST que no se pudo parsear como JSON. Las rutas de F2
+# lo reciben para responder 400 sin ejecutar nada: un cuerpo roto no puede
+# convertirse en un diccionario vacio y, en /diagnostics/runs, disparar la
+# ejecucion del catalogo completo por "checker_ids ausente".
+INVALID_JSON_BODY = object()
+
 # Claves simétricas por dispositivo IoMT (Canal M2M aislado). Sin defaults.
 IOMT_DEVICE_KEYS: Dict[str, bytes] = {}
 IOMT_MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("IOMT_MAX_CLOCK_SKEW_SECONDS", "300"))
@@ -174,8 +180,13 @@ DB_PATH = os.environ.get("LIS_DB_PATH", os.path.join(CURRENT_DIR, "data", "lis.d
 db_manager = ClinicalDatabaseManager(db_path=DB_PATH)
 
 # M3 Inventario: el catalogo semilla de activos del laboratorio F11 se inserta
-# de forma idempotente en el arranque. Un activo ya existente no se duplica ni
-# se sobrescribe: su correccion se hace por la API, que queda auditada.
+# de forma idempotente, atomica y auditada en el arranque. La siembra se
+# ejecuta una sola vez (queda auditada con un evento ASSET_SEED) y un activo
+# ya existente no se duplica ni se sobrescribe: su correccion se hace por la
+# API, que queda auditada.
+# Si la siembra falla el backend NO arranca (fail-closed): arrancar con el
+# inventario vacio o a medias publicaria un inventario que no describe lo que
+# hay, que es exactamente lo que el modulo M3 no puede hacer.
 try:
     SEED_RESULT = seed_catalog(db_manager)
     print(
@@ -183,7 +194,8 @@ try:
         % (len(SEED_RESULT.get("created", [])), len(SEED_RESULT.get("skipped", [])))
     )
 except Exception as e:
-    print("[WARN] No se pudo sembrar el inventario de activos: %s" % e)
+    print("[FATAL] No se pudo sembrar el inventario de activos: %s" % e, file=sys.stderr)
+    raise
 
 # Clave del sello de integridad clínico. Override explícito solo para pruebas.
 CLINICAL_SEAL_KEY: Optional[bytes] = None
@@ -861,6 +873,22 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             })
         return context, None
 
+    def _json_object_error(self, payload: Any) -> Optional[Dict[str, Any]]:
+        """
+        Devuelve el cuerpo 400 si el payload no es un objeto JSON, o None si lo es.
+
+        Las rutas de F2 reciben un objeto: una lista o un escalar no tienen
+        campos que validar y antes producian un 500 por AttributeError. El
+        formato de la respuesta es el mismo que usan las demas validaciones.
+        """
+        if isinstance(payload, dict):
+            return None
+        return {
+            "error": "BadRequest",
+            "message": "El cuerpo de la peticion debe ser un objeto JSON",
+            "code": "INVALID_JSON_BODY",
+        }
+
     def _handle_diagnostics_checkers_get(self, client_ip: str) -> None:
         """Catalogo de comprobadores ejecutables del diagnostico de seguridad."""
         context, failure = self._authorize_policy(
@@ -1116,12 +1144,30 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             self.send_json(failure[0], failure[1])
             return
 
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "DIAGNOSTIC_RUN", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Ejecucion de diagnostico rechazada: el cuerpo de la peticion no es un "
+                "objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
         requested = payload.get("checker_ids")
         checker_ids: Optional[List[str]] = None
         if requested is not None:
             if not isinstance(requested, list) or not all(
                 isinstance(item, str) for item in requested
             ):
+                record_audit_event(
+                    "DIAGNOSTIC_RUN", context.username, str(list(context.roles)),
+                    "DENIED_INVALID",
+                    "Ejecucion de diagnostico rechazada: checker_ids no es una lista de "
+                    "identificadores de comprobador",
+                    client_ip, context.mfa_verified,
+                )
                 self.send_json(400, {
                     "error": "BadRequest",
                     "message": "checker_ids debe ser una lista de identificadores de comprobador",
@@ -1132,6 +1178,13 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             known = {entry["id"] for entry in checker_catalog()}
             unknown = [item for item in requested if item not in known]
             if unknown:
+                record_audit_event(
+                    "DIAGNOSTIC_RUN", context.username, str(list(context.roles)),
+                    "DENIED_INVALID",
+                    "Ejecucion de diagnostico rechazada: comprobadores desconocidos: %s"
+                    % ", ".join(sorted(unknown)),
+                    client_ip, context.mfa_verified,
+                )
                 self.send_json(400, {
                     "error": "BadRequest",
                     "message": "Hay comprobadores desconocidos en la peticion",
@@ -1164,6 +1217,7 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 "status": result.status,
                 "asset_ref": result.asset_ref,
                 "evidence_command": result.evidence_command,
+                "evidence_source": result.evidence_source,
                 "evidence_output": result.evidence_output,
                 "remediation": result.remediation,
                 "detected_at": finished_at,
@@ -1211,6 +1265,17 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         if failure is not None:
             self.send_json(failure[0], failure[1])
             return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "ASSET_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de activo rechazada: el cuerpo de la peticion no es un objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
         errors = validate_asset(payload)
         if errors:
             record_audit_event(
@@ -1239,8 +1304,24 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             "description": str(payload.get("description")).strip(),
             "revision": 1,
         }
+        audit_event = {
+            "action": "ASSET_CREATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": "Activo %s (%s, %s, origen %s) dado de alta" % (
+                record["name"], record["classification"], record["criticality"],
+                record["source"],
+            ),
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
         try:
-            asset = db_manager.insert_asset(record)
+            # El alta y su evento se confirman en la misma transaccion: no
+            # puede quedar un activo escrito sin el evento que lo declara.
+            asset, _audit_record = db_manager.insert_asset_with_audit_event(
+                record, audit_event,
+            )
         except AssetAlreadyExistsError as exc:
             record_audit_event(
                 "ASSET_CREATE", context.username, str(list(context.roles)), "DENIED_DUPLICATE",
@@ -1253,19 +1334,17 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             })
             return
         except AssetValidationError as exc:
+            record_audit_event(
+                "ASSET_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de activo con datos invalidos: %s" % str(exc)[:200],
+                client_ip, context.mfa_verified,
+            )
             self.send_json(400, {
                 "error": "BadRequest",
                 "message": str(exc),
                 "code": "ASSET_INVALID",
             })
             return
-        record_audit_event(
-            "ASSET_CREATE", context.username, str(list(context.roles)), "ALLOWED",
-            "Activo %s (%s, %s, origen %s) dado de alta" % (
-                asset["name"], asset["classification"], asset["criticality"], asset["source"],
-            ),
-            client_ip, context.mfa_verified,
-        )
         self.send_json(201, {"asset": asset, "environment": F11_ENVIRONMENT})
 
     def _handle_asset_update_post(
@@ -1280,12 +1359,30 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         if failure is not None:
             self.send_json(failure[0], failure[1])
             return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Actualizacion de activo rechazada: el cuerpo de la peticion no es un "
+                "objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
         updatable = (
             "name", "classification", "criticality", "owner", "source",
             "version", "environment", "synthetic", "description",
         )
         changes = {key: payload[key] for key in updatable if key in payload}
         if not changes:
+            record_audit_event(
+                "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Actualizacion de activo rechazada: no se ha indicado ningun campo "
+                "modificable",
+                client_ip, context.mfa_verified,
+            )
             self.send_json(400, {
                 "error": "BadRequest",
                 "message": "Indica al menos un campo a actualizar",
@@ -1307,8 +1404,26 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 "fields": _fields_from_errors(errors),
             })
             return
+        audit_event = {
+            "action": "ASSET_UPDATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": "Activo %s actualizado" % asset_id,
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
         try:
-            asset = db_manager.update_asset(asset_id, changes)
+            # La actualizacion y su evento se confirman juntos: el detalle se
+            # construye con la revision real ya aplicada dentro de la transaccion.
+            asset, _audit_record = db_manager.update_asset_with_audit_event(
+                asset_id,
+                changes,
+                audit_event,
+                details_builder=lambda updated: "Activo %s actualizado a la revision %s" % (
+                    updated["name"], updated["revision"],
+                ),
+            )
         except AssetNotFoundError as exc:
             record_audit_event(
                 "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
@@ -1321,6 +1436,10 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             })
             return
         except AssetAlreadyExistsError as exc:
+            record_audit_event(
+                "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_DUPLICATE",
+                str(exc)[:200], client_ip, context.mfa_verified,
+            )
             self.send_json(409, {
                 "error": "Conflict",
                 "message": str(exc),
@@ -1328,17 +1447,17 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             })
             return
         except AssetValidationError as exc:
+            record_audit_event(
+                "ASSET_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Actualizacion de activo con datos invalidos: %s" % str(exc)[:200],
+                client_ip, context.mfa_verified,
+            )
             self.send_json(400, {
                 "error": "BadRequest",
                 "message": str(exc),
                 "code": "ASSET_INVALID",
             })
             return
-        record_audit_event(
-            "ASSET_UPDATE", context.username, str(list(context.roles)), "ALLOWED",
-            "Activo %s actualizado a la revision %s" % (asset["name"], asset["revision"]),
-            client_ip, context.mfa_verified,
-        )
         self.send_json(200, {"asset": asset, "environment": F11_ENVIRONMENT})
 
     def _handle_asset_evaluation_post(
@@ -1353,6 +1472,17 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         if failure is not None:
             self.send_json(failure[0], failure[1])
             return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "ASSET_EVALUATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Evaluacion de activo rechazada: el cuerpo de la peticion no es un objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
         errors: List[str] = []
         criticality = str(payload.get("criticality") or "").strip()
         if criticality not in criticalities():
@@ -1402,9 +1532,28 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             "notes": notes,
             "findings_count": findings_count,
         }
+        audit_event = {
+            "action": "ASSET_EVALUATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": (
+                "Evaluacion del activo %s: criticidad %s, %d hallazgos asociados"
+                % (asset_id, criticality, findings_count)
+            ),
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
         try:
-            stored = db_manager.insert_asset_evaluation(evaluation)
+            # La evaluacion y su evento se confirman en la misma transaccion.
+            stored, _audit_record = db_manager.insert_asset_evaluation_with_audit_event(
+                evaluation, audit_event,
+            )
         except AssetNotFoundError as exc:
+            record_audit_event(
+                "ASSET_EVALUATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                str(exc)[:200], client_ip, context.mfa_verified,
+            )
             self.send_json(404, {
                 "error": "NotFound",
                 "message": str(exc),
@@ -1412,18 +1561,17 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             })
             return
         except AssetValidationError as exc:
+            record_audit_event(
+                "ASSET_EVALUATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Evaluacion de activo con datos invalidos: %s" % str(exc)[:200],
+                client_ip, context.mfa_verified,
+            )
             self.send_json(400, {
                 "error": "BadRequest",
                 "message": str(exc),
                 "code": "ASSET_EVALUATION_INVALID",
             })
             return
-        record_audit_event(
-            "ASSET_EVALUATE", context.username, str(list(context.roles)), "ALLOWED",
-            "Evaluacion del activo %s: criticidad %s, %d hallazgos asociados"
-            % (asset_id, criticality, findings_count),
-            client_ip, context.mfa_verified,
-        )
         self.send_json(201, {"evaluation": stored, "environment": F11_ENVIRONMENT})
 
     def do_POST(self) -> None:
@@ -1535,8 +1683,16 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
 
         try:
             payload = json.loads(body)
+            body_parsed = True
         except Exception:
             payload = {}
+            body_parsed = False
+
+        # Las rutas de F2 reciben un marcador cuando el cuerpo no parsea: el
+        # handler responde 400 con el formato {error, message, code} sin
+        # ejecutar comprobadores ni escribir nada. Las rutas que no son de F2
+        # conservan el comportamiento previo.
+        f2_payload: Any = payload if body_parsed else INVALID_JSON_BODY
 
         # Account request: recorded in the audit trail and granting no access.
         # Authorization and identity creation belong to the administrator.
@@ -1561,24 +1717,24 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
 
         # 1.b Diagnostico de Seguridad (M2): ejecucion de comprobadores reales
         if parsed.path == "/api/v1/diagnostics/runs":
-            self._handle_diagnostic_run_post(payload, client_ip)
+            self._handle_diagnostic_run_post(f2_payload, client_ip)
             return
 
         # 1.c Inventario de Activos (M3): alta, actualizacion y evaluacion.
         # El handler es http.server puro: solo hay do_GET y do_POST, asi que la
         # actualizacion de un activo va por POST a /api/v1/assets/{id}.
         if parsed.path == "/api/v1/assets":
-            self._handle_asset_create_post(payload, client_ip)
+            self._handle_asset_create_post(f2_payload, client_ip)
             return
 
         if parsed.path.startswith("/api/v1/assets/"):
             remainder = parsed.path[len("/api/v1/assets/"):]
             parts = [segment for segment in remainder.split("/") if segment]
             if len(parts) == 2 and parts[1] == "evaluations":
-                self._handle_asset_evaluation_post(parts[0], payload, client_ip)
+                self._handle_asset_evaluation_post(parts[0], f2_payload, client_ip)
                 return
             if len(parts) == 1:
-                self._handle_asset_update_post(parts[0], payload, client_ip)
+                self._handle_asset_update_post(parts[0], f2_payload, client_ip)
                 return
 
         if parsed.path == "/api/v1/auth/login":
