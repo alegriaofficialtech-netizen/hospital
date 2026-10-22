@@ -139,7 +139,9 @@ class IdentityAdminSuite(unittest.TestCase):
             {"username": username, "roles": ["medico"], "require_mfa": True},
         )
         self.assertEqual(201, status, payload)
-        self.assertIn("temporary_password", payload)
+        # La credencial ya no viaja al navegador: llega la ruta del fichero 0600.
+        self.assertNotIn("temporary_password", payload)
+        self.assertTrue(payload.get("credential_file"))
         created = payload["identity"]
         self.assertEqual(username, created["username"])
 
