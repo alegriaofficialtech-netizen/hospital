@@ -164,10 +164,23 @@ class IdentityAdminSuite(unittest.TestCase):
         token = self.token("medico.test")
         status, payload = self.call(
             token, "POST", "/api/v1/admin/identities",
-            {"username": "escalada.test", "roles": ["sgsi-admin"]},
+            {"username": "escalada-%d.test" % int(time.time()), "roles": ["sgsi-admin"]},
         )
-        self.assertIn(status, (400, 403), payload)
+        self.assertEqual(403, status, payload)
         self.assertEqual("IDENTITY_PROTECTED_ROLE", payload.get("code"))
+
+    def test_07b_protected_role_creates_nothing(self):
+        """Un rechazo por rol protegido no deja cuentas huerfanas."""
+        token = self.token("medico.test")
+        username = "huerfana-%d.test" % int(time.time())
+        status, payload = self.call(
+            token, "POST", "/api/v1/admin/identities",
+            {"username": username, "roles": ["sgsi-admin"]},
+        )
+        self.assertEqual(403, status, payload)
+        listing = self.call(token, "GET", "/api/v1/admin/identities")[1]
+        names = [identity["username"] for identity in listing.get("identities", [])]
+        self.assertNotIn(username, names)
 
     def test_08_password_never_travels_to_the_browser(self):
         """La credencial se entrega en un fichero 0600 del servidor."""
