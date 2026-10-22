@@ -23,7 +23,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ZERO_HASH = "0" * 64
 
 # Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
@@ -453,6 +453,28 @@ class ClinicalDatabaseManager:
                             "ALTER TABLE security_findings ADD COLUMN evidence_source TEXT NOT NULL DEFAULT '';"
                         )
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (4, datetime('now'));")
+
+                if current_ver < 5:
+                    # Migracion 5: rellena el origen de la evidencia en los
+                    # hallazgos anteriores a la migracion 4, que se guardaron sin
+                    # el. El mecanismo de cada comprobador es determinista y no
+                    # cambio, asi que derivarlo del checker_id no inventa dato:
+                    # solo hace explicito lo que ya era cierto. Lo que no encaja
+                    # en ninguna regla queda como 'undeclared' y se ve.
+                    cur.execute("""
+                        UPDATE security_findings SET evidence_source = CASE
+                            WHEN checker_id LIKE 'KC_%' THEN 'keycloak_admin_api'
+                            WHEN checker_id LIKE 'BACKEND_AUDIT%' THEN 'sqlite'
+                            WHEN checker_id LIKE 'DATA_FILES%' THEN 'filesystem'
+                            WHEN checker_id = 'FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD' THEN 'filesystem'
+                            WHEN checker_id = 'BACKEND_AUTH_DELEGATED_TO_KEYCLOAK' THEN 'filesystem'
+                            WHEN checker_id = 'CONTAINER_HARDENING' THEN 'docker_inspect'
+                            WHEN checker_id = 'BACKEND_ADMIN_REQUIRES_MFA' THEN 'in_process'
+                            ELSE 'undeclared'
+                        END
+                        WHERE COALESCE(evidence_source, '') = '';
+                    """)
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (5, datetime('now'));")
 
                 cur.execute("COMMIT;")
             except Exception as e:

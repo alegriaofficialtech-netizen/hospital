@@ -61,7 +61,7 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | F0 | Base del laboratorio como modulo demostrativo: login real con OIDC/PKCE, permisos, MFA TOTP, auditoria encadenada, suite de 12 pruebas | **hecha** |
 | F1 | M1 Identidad y acceso: API de administracion, permisos con MFA, baja logica, rotacion, auditoria de la gestion | **en curso** |
 | F1b | M1 pantalla Angular de administracion de identidades, con el patron visual del login | pendiente |
-| F2 | M2 Diagnostico + M3 Inventario: comprobadores reales y catalogo de activos | pendiente |
+| F2 | M2 Diagnostico + M3 Inventario: comprobadores reales y catalogo de activos | **cerrada** |
 | F3 | M4 Matriz de riesgos + M5 Controles, derivados de lo que M2 y M3 hayan encontrado | pendiente |
 | F4 | M6 Incidentes + M8 Indicadores sobre datos reales de la plataforma | pendiente |
 | F5 | M9 Validacion por expertos y consolidacion de la evidencia por objetivo | pendiente |
@@ -248,8 +248,7 @@ matriz de riesgos de M4.
 ### Verificacion
 
 - **55/55 pruebas de API** (27 previas + 28 de F2) contra la pila desplegada.
-- **Migracion 4** aplicada: `security_findings.evidence_source` existe y la API
-  lo publica.
+- **Migraciones 4 y 5** aplicadas: `security_findings.evidence_source` existe y la API lo publica; 252 hallazgos historicos regularizados con su origen determinista.
 - **Atomicidad probada por mutacion**, no por lectura: `test_27` fuerza el fallo
   de auditoria y exige que no quede el activo; `test_28` hace lo mismo con la
   ejecucion y sus hallazgos. Se rompio la implementacion a proposito y ambas
