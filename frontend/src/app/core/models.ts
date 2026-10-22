@@ -9,6 +9,7 @@ export const USER_ROLES: readonly UserRole[] = [
   'ROLE_LAB_TECH',
   'ROLE_PATHOLOGIST',
   'ROLE_SECURITY_AUDITOR',
+  'ROLE_PLATFORM_ADMIN',
 ];
 
 export const ROLE_LABELS: Record<UserRole, string> = {

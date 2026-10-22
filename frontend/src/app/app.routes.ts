@@ -60,6 +60,28 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/indicators/indicators.component').then((m) => m.IndicatorsComponent),
       },
+      {
+        path: 'diagnostico',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/diagnostics/diagnostics.component').then(
+            (m) => m.DiagnosticsComponent,
+          ),
+      },
+      {
+        path: 'inventario',
+        canActivate: [
+          roleGuard([
+            'ROLE_RECEPTION',
+            'ROLE_LAB_TECH',
+            'ROLE_PATHOLOGIST',
+            'ROLE_SECURITY_AUDITOR',
+            'ROLE_PLATFORM_ADMIN',
+          ]),
+        ],
+        loadComponent: () =>
+          import('./features/assets/assets.component').then((m) => m.AssetsComponent),
+      },
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
     ],
   },

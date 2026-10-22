@@ -49,6 +49,10 @@ const ROLE_ALIASES: Record<string, UserRole> = {
   medico: 'ROLE_PATHOLOGIST',
   auditor: 'ROLE_SECURITY_AUDITOR',
   audit: 'ROLE_SECURITY_AUDITOR',
+  'sgsi-admin': 'ROLE_PLATFORM_ADMIN',
+  sgsi_admin: 'ROLE_PLATFORM_ADMIN',
+  administrador: 'ROLE_PLATFORM_ADMIN',
+  platform_admin: 'ROLE_PLATFORM_ADMIN',
 };
 
 function mapRealmRole(rawRole: string): UserRole | undefined {

@@ -61,6 +61,24 @@ const NAV_ITEMS: readonly NavItem[] = [
       'ROLE_SECURITY_AUDITOR',
     ],
   },
+  {
+    label: 'Diagnóstico',
+    icon: 'health_and_safety',
+    route: '/diagnostico',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Inventario',
+    icon: 'inventory_2',
+    route: '/inventario',
+    roles: [
+      'ROLE_RECEPTION',
+      'ROLE_LAB_TECH',
+      'ROLE_PATHOLOGIST',
+      'ROLE_SECURITY_AUDITOR',
+      'ROLE_PLATFORM_ADMIN',
+    ],
+  },
 ];
 
 @Component({

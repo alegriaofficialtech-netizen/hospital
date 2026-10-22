@@ -1,0 +1,619 @@
+<section class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Inventario de activos</h1>
+      <p class="page-subtitle">
+        Los componentes del laboratorio F11 con su clasificación, su criticidad y su
+        historial de evaluaciones. El inventario describe lo que existe, no lo que debería
+        existir.
+      </p>
+    </div>
+    <div class="header-actions">
+      <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+      @if (canManage()) {
+        <button
+          mat-flat-button
+          color="primary"
+          type="button"
+          (click)="openCreateForm()"
+          [disabled]="formMode() === 'create'"
+        >
+          <mat-icon>add</mat-icon>
+          Nuevo activo
+        </button>
+      }
+    </div>
+  </header>
+
+  <div class="synthetic-banner">
+    <mat-icon>science</mat-icon>
+    <span>
+      Laboratorio sintético F11 · entorno <strong>{{ environment() }}</strong> · el catálogo
+      describe los componentes reales del entorno de demostración y los activos de datos que
+      guardan información clínica son sintéticos.
+    </span>
+  </div>
+
+  @if (manageBlockedReason(); as reason) {
+    <p class="permission-note">
+      <mat-icon>lock</mat-icon>
+      <span>{{ reason }}</span>
+    </p>
+  }
+
+  @if (error(); as problem) {
+    <div class="inline-error" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ problem }}</span>
+    </div>
+  }
+
+  @if (summary(); as data) {
+    <div class="kpi-grid">
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon">inventory_2</mat-icon>
+        <span class="kpi-label">Activos totales</span>
+        <strong class="kpi-value">{{ data.total }}</strong>
+        <span class="kpi-hint">Origen: /assets/summary · summary.total</span>
+      </mat-card>
+
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon">category</mat-icon>
+        <span class="kpi-label">Clasificaciones</span>
+        <strong class="kpi-value">{{ classificationBreakdown().length }}</strong>
+        <span class="kpi-hint">Origen: /assets/summary · summary.by_classification</span>
+      </mat-card>
+
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon">gpp_maybe</mat-icon>
+        <span class="kpi-label">Criticidades</span>
+        <strong class="kpi-value">{{ criticalityBreakdown().length }}</strong>
+        <span class="kpi-hint">Origen: /assets/summary · summary.by_criticality</span>
+      </mat-card>
+
+      <mat-card class="kpi-card">
+        <mat-icon class="kpi-icon">source</mat-icon>
+        <span class="kpi-label">Orígenes</span>
+        <strong class="kpi-value">{{ sourceBreakdown().length }}</strong>
+        <span class="kpi-hint">Origen: /assets/summary · summary.by_source</span>
+      </mat-card>
+    </div>
+  }
+
+  <mat-card class="table-card">
+    <div class="card-heading">
+      <div>
+        <h2>Indicadores del inventario</h2>
+        <p>Reparto del catálogo por clasificación, criticidad y origen.</p>
+      </div>
+    </div>
+
+    <div class="indicator-grid">
+      <section class="indicator-block">
+        <h3>Por clasificación</h3>
+        <p class="indicator-source">Origen: /assets/summary · summary.by_classification</p>
+        <ul class="indicator-list">
+          @for (entry of classificationBreakdown(); track entry.key) {
+            <li>
+              <span class="indicator-key">{{ entry.key }}</span>
+              <strong>{{ entry.value }}</strong>
+            </li>
+          } @empty {
+            <li class="indicator-empty">El resumen no trae reparto por clasificación.</li>
+          }
+        </ul>
+      </section>
+
+      <section class="indicator-block">
+        <h3>Por criticidad</h3>
+        <p class="indicator-source">Origen: /assets/summary · summary.by_criticality</p>
+        <ul class="indicator-list">
+          @for (entry of criticalityBreakdown(); track entry.key) {
+            <li>
+              <span class="indicator-key">{{ entry.key }}</span>
+              <strong>{{ entry.value }}</strong>
+            </li>
+          } @empty {
+            <li class="indicator-empty">El resumen no trae reparto por criticidad.</li>
+          }
+        </ul>
+      </section>
+
+      <section class="indicator-block">
+        <h3>Por origen</h3>
+        <p class="indicator-source">Origen: /assets/summary · summary.by_source</p>
+        <ul class="indicator-list">
+          @for (entry of sourceBreakdown(); track entry.key) {
+            <li>
+              <span class="indicator-key">{{ entry.key }}</span>
+              <strong>{{ entry.value }}</strong>
+            </li>
+          } @empty {
+            <li class="indicator-empty">El resumen no trae reparto por origen.</li>
+          }
+        </ul>
+      </section>
+    </div>
+  </mat-card>
+
+  <mat-card class="table-card">
+    <div class="card-heading table-heading">
+      <div>
+        <h2>Activos</h2>
+        <p>
+          {{ assets().length }} activo(s) devuelto(s) por la API. Pulsa el nombre de un activo
+          para ver su detalle y su historial de evaluaciones.
+        </p>
+      </div>
+      <div class="filters">
+        <mat-form-field appearance="outline">
+          <mat-label>Clasificación</mat-label>
+          <mat-select
+            [value]="classificationFilter()"
+            (selectionChange)="setClassificationFilter($event.value)"
+          >
+            <mat-option value="ALL">Todas</mat-option>
+            @for (classification of classifications; track classification) {
+              <mat-option [value]="classification">{{ classification }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Criticidad</mat-label>
+          <mat-select
+            [value]="criticalityFilter()"
+            (selectionChange)="setCriticalityFilter($event.value)"
+          >
+            <mat-option value="ALL">Todas</mat-option>
+            @for (criticality of criticalities; track criticality) {
+              <mat-option [value]="criticality">{{ criticality }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Origen</mat-label>
+          <mat-select [value]="sourceFilter()" (selectionChange)="setSourceFilter($event.value)">
+            <mat-option value="ALL">Todos</mat-option>
+            @for (source of sources; track source) {
+              <mat-option [value]="source">{{ source }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      </div>
+    </div>
+
+    @if (loading()) {
+      <div class="loading-row">
+        <mat-spinner diameter="32" />
+        <span>Cargando inventario…</span>
+      </div>
+    } @else if (assets().length) {
+      <div class="table-wrap">
+        <table mat-table [dataSource]="assets()" class="app-table assets-table">
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef>Nombre</th>
+            <td mat-cell *matCellDef="let asset">
+              <button
+                mat-button
+                type="button"
+                class="asset-name-button"
+                (click)="selectAsset(asset.id)"
+              >
+                {{ asset.name }}
+              </button>
+              <small class="asset-id">{{ asset.id }}</small>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="classification">
+            <th mat-header-cell *matHeaderCellDef>Clasificación</th>
+            <td mat-cell *matCellDef="let asset">{{ asset.classification }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="criticality">
+            <th mat-header-cell *matHeaderCellDef>Criticidad</th>
+            <td mat-cell *matCellDef="let asset">
+              <span
+                class="criticality"
+                [class.criticality-critical]="asset.criticality === 'critical'"
+                [class.criticality-high]="asset.criticality === 'high'"
+                [class.criticality-medium]="asset.criticality === 'medium'"
+                [class.criticality-low]="asset.criticality === 'low'"
+              >
+                {{ asset.criticality }}
+              </span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="owner">
+            <th mat-header-cell *matHeaderCellDef>Responsable</th>
+            <td mat-cell *matCellDef="let asset" class="details-cell">{{ asset.owner }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="source">
+            <th mat-header-cell *matHeaderCellDef>Origen</th>
+            <td mat-cell *matCellDef="let asset">{{ asset.source }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="version">
+            <th mat-header-cell *matHeaderCellDef>Versión</th>
+            <td mat-cell *matCellDef="let asset">{{ asset.version }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="synthetic">
+            <th mat-header-cell *matHeaderCellDef>Sintético</th>
+            <td mat-cell *matCellDef="let asset">
+              @if (isSynthetic(asset)) {
+                <mat-chip-set>
+                  <mat-chip class="chip-synthetic">sintético</mat-chip>
+                </mat-chip-set>
+              } @else {
+                <span class="not-synthetic">no</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="revision">
+            <th mat-header-cell *matHeaderCellDef>Revisión</th>
+            <td mat-cell *matCellDef="let asset">{{ asset.revision }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="updated">
+            <th mat-header-cell *matHeaderCellDef>Actualizado</th>
+            <td mat-cell *matCellDef="let asset">{{ toDate(asset.updated_at) | date: 'medium' }}</td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="assetColumns"></tr>
+          <tr
+            mat-row
+            *matRowDef="let row; columns: assetColumns"
+            [class.selected-row]="selectedAssetId() === row.id"
+          ></tr>
+        </table>
+      </div>
+    } @else {
+      @if (hasActiveFilters()) {
+        <p class="empty-state">
+          Todavía no hay activos que coincidan con los filtros seleccionados.
+        </p>
+      } @else {
+        <p class="empty-state">Todavía no hay activos en el inventario.</p>
+      }
+    }
+  </mat-card>
+
+  @if (selectedAssetId(); as assetId) {
+    <mat-card class="table-card">
+      <div class="card-heading">
+        <div>
+          <h2>Detalle del activo {{ assetId }}</h2>
+          <p>Datos del activo y su historial de evaluaciones.</p>
+        </div>
+        <button mat-stroked-button type="button" (click)="clearSelection()">Cerrar</button>
+      </div>
+
+      @if (detailLoading()) {
+        <div class="loading-row">
+          <mat-spinner diameter="32" />
+          <span>Cargando detalle del activo…</span>
+        </div>
+      } @else if (detailError(); as problem) {
+        <div class="inline-error" role="alert">
+          <mat-icon>error_outline</mat-icon>
+          <span>{{ problem }}</span>
+        </div>
+      } @else if (selectedAsset(); as asset) {
+        <dl class="asset-detail">
+          <div class="detail-item">
+            <dt>Nombre</dt>
+            <dd>{{ asset.name }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Clasificación</dt>
+            <dd>{{ asset.classification }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Criticidad</dt>
+            <dd>{{ asset.criticality }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Responsable</dt>
+            <dd>{{ asset.owner }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Origen</dt>
+            <dd>{{ asset.source }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Versión</dt>
+            <dd>{{ asset.version }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Entorno</dt>
+            <dd>{{ asset.environment }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Sintético</dt>
+            <dd>{{ isSynthetic(asset) ? 'sí' : 'no' }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Revisión</dt>
+            <dd>{{ asset.revision }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Creado</dt>
+            <dd>{{ toDate(asset.created_at) | date: 'medium' }}</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Actualizado</dt>
+            <dd>{{ toDate(asset.updated_at) | date: 'medium' }}</dd>
+          </div>
+          <div class="detail-item detail-wide">
+            <dt>Descripción</dt>
+            <dd>{{ asset.description }}</dd>
+          </div>
+        </dl>
+
+        @if (canManage()) {
+          <button mat-stroked-button type="button" (click)="openEditForm(asset)">
+            <mat-icon>edit</mat-icon>
+            Editar activo
+          </button>
+        }
+
+        <h3 class="block-title">Historial de evaluaciones</h3>
+        <p class="indicator-source">Origen: /assets/{{ assetId }} · evaluations</p>
+
+        @if (evaluations().length) {
+          <div class="table-wrap">
+            <table mat-table [dataSource]="evaluations()" class="app-table evaluations-table">
+              <ng-container matColumnDef="evaluated">
+                <th mat-header-cell *matHeaderCellDef>Fecha</th>
+                <td mat-cell *matCellDef="let evaluation">
+                  {{ toDate(evaluation.evaluated_at) | date: 'medium' }}
+                </td>
+              </ng-container>
+
+              <ng-container matColumnDef="evaluator">
+                <th mat-header-cell *matHeaderCellDef>Evaluador</th>
+                <td mat-cell *matCellDef="let evaluation">{{ evaluation.evaluated_by }}</td>
+              </ng-container>
+
+              <ng-container matColumnDef="criticality">
+                <th mat-header-cell *matHeaderCellDef>Criticidad</th>
+                <td mat-cell *matCellDef="let evaluation">{{ evaluation.criticality }}</td>
+              </ng-container>
+
+              <ng-container matColumnDef="findings">
+                <th mat-header-cell *matHeaderCellDef>Hallazgos</th>
+                <td mat-cell *matCellDef="let evaluation">{{ evaluation.findings_count }}</td>
+              </ng-container>
+
+              <ng-container matColumnDef="notes">
+                <th mat-header-cell *matHeaderCellDef>Notas</th>
+                <td mat-cell *matCellDef="let evaluation" class="details-cell">
+                  {{ evaluation.notes }}
+                </td>
+              </ng-container>
+
+              <tr mat-header-row *matHeaderRowDef="evaluationColumns"></tr>
+              <tr mat-row *matRowDef="let row; columns: evaluationColumns"></tr>
+            </table>
+          </div>
+        } @else {
+          <p class="empty-state">Este activo todavía no tiene evaluaciones registradas.</p>
+        }
+
+        @if (canManage()) {
+          <mat-card class="form-card evaluation-card">
+            <div class="card-heading">
+              <div>
+                <h2>Registrar evaluación</h2>
+                <p>La evaluación deja constancia de la criticidad revisada y de sus notas.</p>
+              </div>
+            </div>
+
+            <form class="evaluation-form" (ngSubmit)="saveEvaluation()">
+              <mat-form-field appearance="outline">
+                <mat-label>Criticidad</mat-label>
+                <mat-select
+                  [value]="evaluationCriticality()"
+                  (selectionChange)="evaluationCriticality.set($event.value)"
+                >
+                  <mat-option value="">Selecciona una criticidad</mat-option>
+                  @for (criticality of criticalities; track criticality) {
+                    <mat-option [value]="criticality">{{ criticality }}</mat-option>
+                  }
+                </mat-select>
+                @if (evaluationFieldErrors()['criticality']; as problem) {
+                  <mat-error>{{ problem }}</mat-error>
+                }
+              </mat-form-field>
+
+              <mat-form-field appearance="outline">
+                <mat-label>Notas</mat-label>
+                <textarea
+                  matInput
+                  name="evaluationNotes"
+                  rows="3"
+                  [ngModel]="evaluationNotes()"
+                  (ngModelChange)="evaluationNotes.set($event)"
+                ></textarea>
+                <mat-hint>Hasta 600 caracteres.</mat-hint>
+                @if (evaluationFieldErrors()['notes']; as problem) {
+                  <mat-error>{{ problem }}</mat-error>
+                }
+              </mat-form-field>
+
+              @if (evaluationError(); as problem) {
+                <p class="inline-error" role="alert">
+                  <mat-icon>error_outline</mat-icon>
+                  <span>{{ problem }}</span>
+                </p>
+              }
+
+              <button
+                mat-flat-button
+                color="primary"
+                type="submit"
+                class="submit-button"
+                [disabled]="savingEvaluation()"
+              >
+                <mat-icon>{{ savingEvaluation() ? 'hourglass_top' : 'fact_check' }}</mat-icon>
+                {{ savingEvaluation() ? 'Registrando…' : 'Registrar evaluación' }}
+              </button>
+            </form>
+          </mat-card>
+        }
+      }
+    </mat-card>
+  }
+
+  @if (formMode(); as mode) {
+    <mat-card class="form-card">
+      <div class="card-heading">
+        <div>
+          <h2>{{ mode === 'create' ? 'Nuevo activo' : 'Editar activo' }}</h2>
+          <p>
+            @if (mode === 'create') {
+              Da de alta un componente del inventario. El propietario es un rol o un equipo.
+            } @else {
+              Cada guardado incrementa la revisión del activo.
+            }
+          </p>
+        </div>
+        <button mat-stroked-button type="button" (click)="closeForm()">Cancelar</button>
+      </div>
+
+      <form class="asset-form" (ngSubmit)="saveAsset()">
+        <mat-form-field appearance="outline">
+          <mat-label>Nombre</mat-label>
+          <input
+            matInput
+            name="assetName"
+            autocomplete="off"
+            [ngModel]="formName()"
+            (ngModelChange)="formName.set($event)"
+          />
+          <mat-hint>Entre 3 y 80 caracteres. Letras, dígitos, guion, guion bajo y punto.</mat-hint>
+          @if (fieldErrors()['name']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Clasificación</mat-label>
+          <mat-select
+            [value]="formClassification()"
+            (selectionChange)="formClassification.set($event.value)"
+          >
+            <mat-option value="">Selecciona una clasificación</mat-option>
+            @for (classification of classifications; track classification) {
+              <mat-option [value]="classification">{{ classification }}</mat-option>
+            }
+          </mat-select>
+          @if (fieldErrors()['classification']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Criticidad</mat-label>
+          <mat-select
+            [value]="formCriticality()"
+            (selectionChange)="formCriticality.set($event.value)"
+          >
+            <mat-option value="">Selecciona una criticidad</mat-option>
+            @for (criticality of criticalities; track criticality) {
+              <mat-option [value]="criticality">{{ criticality }}</mat-option>
+            }
+          </mat-select>
+          @if (fieldErrors()['criticality']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Responsable</mat-label>
+          <input
+            matInput
+            name="assetOwner"
+            autocomplete="off"
+            [ngModel]="formOwner()"
+            (ngModelChange)="formOwner.set($event)"
+          />
+          <mat-hint>Rol o equipo, nunca el nombre de una persona.</mat-hint>
+          @if (fieldErrors()['owner']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Origen</mat-label>
+          <mat-select [value]="formSource()" (selectionChange)="formSource.set($event.value)">
+            <mat-option value="">Selecciona un origen</mat-option>
+            @for (source of sources; track source) {
+              <mat-option [value]="source">{{ source }}</mat-option>
+            }
+          </mat-select>
+          @if (fieldErrors()['source']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+          <mat-label>Versión</mat-label>
+          <input
+            matInput
+            name="assetVersion"
+            autocomplete="off"
+            [ngModel]="formVersion()"
+            (ngModelChange)="formVersion.set($event)"
+          />
+          <mat-hint>Opcional. Se deja vacío si no se ha podido leer del entorno.</mat-hint>
+          @if (fieldErrors()['version']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="form-wide">
+          <mat-label>Descripción</mat-label>
+          <textarea
+            matInput
+            name="assetDescription"
+            rows="3"
+            [ngModel]="formDescription()"
+            (ngModelChange)="formDescription.set($event)"
+          ></textarea>
+          <mat-hint>Entre 10 y 600 caracteres. Justifica la clasificación elegida.</mat-hint>
+          @if (fieldErrors()['description']; as problem) {
+            <mat-error>{{ problem }}</mat-error>
+          }
+        </mat-form-field>
+
+        @if (formError(); as problem) {
+          <p class="inline-error" role="alert">
+            <mat-icon>error_outline</mat-icon>
+            <span>{{ problem }}</span>
+          </p>
+        }
+
+        <button
+          mat-flat-button
+          color="primary"
+          type="submit"
+          class="submit-button"
+          [disabled]="saving()"
+        >
+          <mat-icon>{{ saving() ? 'hourglass_top' : 'save' }}</mat-icon>
+          {{ saving() ? 'Guardando…' : 'Guardar activo' }}
+        </button>
+      </form>
+    </mat-card>
+  }
+</section>
