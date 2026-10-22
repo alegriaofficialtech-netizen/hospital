@@ -63,8 +63,9 @@ export interface Risk {
   name: string;
   description: string;
   category: RiskCategory;
-  asset_name: string | null;
-  finding_checker: string | null;
+  asset_id: string | null;
+  finding_id: string | null;
+  source_checker: string | null;
   threat: string;
   vulnerability: string;
   probability_inherent: number;
@@ -78,19 +79,42 @@ export interface Risk {
   residual_risk_level: RiskLevel;
   owner_role: string;
   status: RiskStatus;
-  synthetic: number | boolean | null;
+  synthetic: number;
   revision: number;
-  created_at: number | null;
-  updated_at: number | null;
+  created_at: number;
+  updated_at: number;
+  /** Solo en el detalle: controles mitigantes vinculados (join risk_controls). */
+  controls?: RiskLinkedControl[];
 }
 
+/** Control mitigante devuelto dentro del detalle del riesgo (M5 / O3). */
+export interface RiskLinkedControl {
+  id: string;
+  code: string;
+  framework: string;
+  clause_or_pillar: string;
+  name: string;
+  status: string;
+  effectiveness: string | null;
+  evidence_reference: string | null;
+}
+
+/**
+ * Resumen de la matriz de riesgos (M4 / O2).
+ *
+ * Copia fiel de GET /api/v1/risks/summary (backend/database.py:
+ * get_risks_summary). Los nombres coinciden campo a campo con la respuesta
+ * real: los KPI de risks.component.html e indicators.component.html enlazan
+ * estos mismos nombres. Si se renombran aqui, hay que renombrarlos tambien en
+ * las plantillas.
+ */
 export interface RiskSummary {
-  total: number;
-  by_category: Record<string, number>;
-  by_inherent_level: Record<string, number>;
-  by_residual_level: Record<string, number>;
-  by_treatment: Record<string, number>;
+  total_risks: number;
+  inherent_levels: Record<string, number>;
+  residual_levels: Record<string, number>;
   by_status: Record<string, number>;
+  by_treatment: Record<string, number>;
+  by_category: Record<string, number>;
 }
 
 export interface RiskFilters {
@@ -104,12 +128,14 @@ export interface RiskFilters {
 export interface RisksResponse {
   risks: Risk[];
   summary: RiskSummary;
-  timestamp: number;
+  /** La API siempre devuelve el entorno de evidencia (F11). */
+  environment: string;
 }
 
 export interface RiskDetailResponse {
   risk: Risk;
-  linked_controls: any[];
+  /** La API siempre devuelve el entorno de evidencia (F11). */
+  environment: string;
 }
 
 export interface CreateRiskRequest {
@@ -117,8 +143,9 @@ export interface CreateRiskRequest {
   name: string;
   description: string;
   category: RiskCategory;
-  asset_name?: string | null;
-  finding_checker?: string | null;
+  asset_id?: string | null;
+  finding_id?: string | null;
+  source_checker?: string | null;
   threat: string;
   vulnerability: string;
   probability_inherent: number;
@@ -128,15 +155,17 @@ export interface CreateRiskRequest {
   impact_residual?: number | null;
   owner_role?: string;
   status?: RiskStatus;
-  synthetic?: number;
+  // La sinteticidad no se declara desde el cliente: la API impone synthetic = 1
+  // en el alta (regla de evidencia).
 }
 
 export interface UpdateRiskRequest {
   name?: string;
   description?: string;
   category?: RiskCategory;
-  asset_name?: string | null;
-  finding_checker?: string | null;
+  asset_id?: string | null;
+  finding_id?: string | null;
+  source_checker?: string | null;
   threat?: string;
   vulnerability?: string;
   probability_inherent?: number;
@@ -166,7 +195,7 @@ export class RisksService {
 
   getSummary(): Observable<RiskSummary> {
     return this.http
-      .get<{ summary: RiskSummary }>(`${this.baseUrl}/summary`)
+      .get<{ summary: RiskSummary; environment: string }>(`${this.baseUrl}/summary`)
       .pipe(map((res) => res.summary));
   }
 

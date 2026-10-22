@@ -62,7 +62,7 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | F1 | M1 Identidad y acceso: API de administracion, permisos con MFA, baja logica, rotacion, auditoria de la gestion | **en curso** |
 | F1b | M1 pantalla Angular de administracion de identidades, con el patron visual del login | pendiente |
 | F2 | M2 Diagnostico + M3 Inventario: comprobadores reales y catalogo de activos | **cerrada** |
-| F3 | M4 Matriz de riesgos + M5 Controles, derivados de lo que M2 y M3 hayan encontrado | pendiente |
+| F3 | M4 Matriz de riesgos + M5 Controles, derivados de lo que M2 y M3 hayan encontrado | **cerrada** |
 | F4 | M6 Incidentes + M8 Indicadores sobre datos reales de la plataforma | pendiente |
 | F5 | M9 Validacion por expertos y consolidacion de la evidencia por objetivo | pendiente |
 
@@ -74,8 +74,8 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | M1 | | | x | x | Identidades sinteticas, roles del realm, denegaciones reales por rol y por MFA, eventos de gestion en la cadena | real, verificado (F1) |
 | M2 | x | | | | 12 comprobadores ejecutables; cada hallazgo guarda la operacion real, su resultado, la fecha, el estado y el origen del mecanismo (API de Keycloak, ficheros, SQLite, docker inspect). RBAC de lectura y escritura con MFA, e historial de ejecuciones | real, verificado (F2) |
 | M3 | | x | | | Inventario de los componentes reales con clasificacion, criticidad, responsable, origen, version y marca de sintetico; alta y edicion con MFA, e historial de evaluaciones por activo | real, verificado (F2) |
-| M4 | | x | x | | Riesgos con probabilidad, impacto y severidad calculada, enlazados a activos y hallazgos | pendiente |
-| M5 | | | x | | Estado de cada control con su evidencia enlazada; nunca "cumple" sin evidencia | pendiente |
+| M4 | | x | x | | Riesgos con probabilidad, impacto y severidad calculada, enlazados a activos reales de M3 y a hallazgos reales de M2: `finding_id` apunta al hallazgo y `source_checker` guarda el comprobador de origen. Historial de revisiones y matriz 5x5 | real, verificado (F3) |
+| M5 | | | x | | Estado de cada control con su evidencia enlazada; nunca "cumple" sin evidencia (HTTP 400 `CONTROL_EVIDENCE_MISSING`). Controles alineados a ISO/IEC 27001:2022, NIST SP 800-207 y CISA ZTM | real, verificado (F3) |
 | M6 | | | | x | Incidentes con deteccion, accion, cierre y su registro en auditoria | pendiente |
 | M7 | | | x | x | Cadena de hash verificada y su checkpoint | real, verificado |
 | M8 | | | | x | Indicadores con la consulta que los produce. Parcial: ya son reales los del diagnostico y el inventario (reparto por estado, severidad, objetivo, clasificacion y criticidad, cada uno con su campo de origen) | parcial, verificado (F2) |
@@ -321,14 +321,44 @@ F3 queda implementada y verificada sobre la rama `feat/f11-f3-risks-controls`, c
 
 ### Verificacion
 
-- **75/75 pruebas de API aprobadas** (55 de F2 + 20 nuevas de F3) en `infra/f11/run-api-tests.sh` ejecutadas contra la pila real en Debian (`servidor-1`).
-- **Migracion 6 aplicada**: tablas `risks`, `controls`, `risk_controls` y `control_evidences` con indices y claves foraneas consistentes.
+- **89/89 pruebas de API aprobadas** (55 de F2 + 34 de F3) en `infra/f11/run-api-tests.sh` ejecutadas contra la pila real en Debian (`servidor-1`).
+- **Migraciones 6 y 7 aplicadas**: tablas `risks`, `controls`, `risk_controls` y `control_evidences` con indices y claves foraneas consistentes. La migracion 7 anade `risks.source_checker`, aditiva e idempotente, con reparacion de los datos ya sembrados.
 - **Atomicidad y rollback verificados por prueba destructiva**: `test_14` (riesgos), `test_16` (controles) y `test_17` (evidencias de verificacion) fuerzan fallos de auditoria demostrando reversion total sin registros huerfanos.
 - **Cadena criptografica SHA-256 integra**: `test_15` valida el encadenamiento de hashes `prev_hash` -> `hash` para la totalidad de eventos de auditoria emitidos durante las operaciones de F3.
 - **Integracion Frontend**:
   - Rutas y componentes independientes para `/riesgos` y `/controles` con vistas de lista, filtros, matrices y dialogos de verificacion.
   - Tarjetas de resumen en el dashboard de indicadores (`/indicadores`) consumiendo M4 y M5.
   - Navegacion lateral en `shell.component.ts` con control de visibilidad por rol.
+
+### Correcciones aplicadas tras la revision de F3
+
+La primera entrega de F3 aprobaba las pruebas pero tenia nueve defectos reales, todos corregidos y con prueba:
+
+| Defecto | Que estaba mal | Correccion |
+|---|---|---|
+| D1 | la siembra de enlaces riesgo-control tragaba excepciones y podia terminar con la matriz de trazabilidad cortada sin dejar rastro | `ControlSeedError`: un enlace que falla, o un extremo inexistente, aborta la siembra nombrando el par y la causa (fail-closed) |
+| D2 | el alta manual de un riesgo enviaba `asset_name`/`finding_checker`, que el backend solo resuelve durante la siembra: todo riesgo creado desde la interfaz quedaba sin vinculo con M3 ni con M2 | el formulario usa selectores de activo y hallazgo y envia `asset_id`/`finding_id` reales |
+| D3 | el auditor veia botones de gestion de controles que la API le rechazaba con 403 | el criterio de la interfaz es el mismo que el del backend: rol de plataforma **y** MFA acreditada |
+| D4 | el cliente declaraba `synthetic: 1` como si fuera su decision | la sinteticidad la impone el servidor y el cliente no la envia |
+| D5 | la siembra guardaba el **codigo del comprobador** en la columna `finding_id` de `risks`: la trazabilidad O1->O2 apuntaba a un texto que no era un hallazgo | `finding_id` guarda el id de un hallazgo real de la ultima ejecucion, o `null`; el comprobador pasa a la columna nueva `source_checker` |
+| D6 | el contrato de TypeScript declaraba campos que la API nunca devuelve | el contrato es la copia fiel de lo que la API acepta y devuelve |
+| D7 | el alta de controles tampoco forzaba la sinteticidad en el servidor | el servidor la impone en el alta y la ignora en la edicion |
+| D8 | los KPI de resumen de M4 y M5 se renderizaban vacios: el tipo del servicio y las plantillas usaban nombres historicos que la API no devuelve | tipo y plantillas alineados con la respuesta real, con prueba que contrasta la forma y los totales |
+| D9 | el contrato de controles declaraba `synthetic` y `timestamp` inexistentes | contrato limpio |
+
+### Verificacion en navegador real (F3)
+
+Verificacion con Chrome real sobre la pila desplegada, con capturas en `/home/elcra/sgsi-zta-runtime/f11/capturas/shots-f3/` (series 20 a 28).
+
+- **M4 como administrador**: 14 riesgos listados, KPI de total coincidente con las filas listadas (14), KPI de severidad inherente y residual presentes, distribucion por categoria con datos, matriz 5x5 visible, alta accesible con selectores de activo y hallazgo, y detalle con el hallazgo o el comprobador de origen.
+- **M5 como administrador**: 31 controles listados, 62.9 por ciento de cumplimiento verificado (16 de 31), reparto por estado y marcos normativos (ISO/IEC 27001:2022 26, NIST SP 800-207 2, CISA ZTM 3), alta accesible.
+- **Como Oficial de Seguridad (auditor)**: lee la matriz y el catalogo con sus KPI, y **no** ve ninguna accion de gestion ni de verificacion. La interfaz coincide por fin con lo que la API ya imponia con 403.
+- **Login unico**: cero campos de contrasena en la aplicacion en todas las pantallas recorridas.
+
+### Limitaciones de F3
+
+- **TOCTOU en la verificacion de controles** (anotada en `control_management.py`): entre la comprobacion de que el control no esta verificado y la escritura existe una ventana teorica. Ambas operaciones comparten transaccion (`run_clinical_transaction`) y la unicidad de la evidencia la cierra en la practica.
+- La comprobacion automatica del dialogo de verificacion no logro seleccionar el estado "PROPUESTO" en el componente `mat-select`, porque el guion de verificacion solo pulsa botones del DOM. Es una limitacion del guion, no de la aplicacion: la regla de evidencia esta cubierta por las pruebas de API y por las 16 verificaciones reales visibles en el catalogo.
 
 ### Estado de Cuentas y Privilegios
 

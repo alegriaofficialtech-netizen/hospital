@@ -10,6 +10,9 @@ Regla central de evidencia:
 * Un control NUNCA puede declararse VERIFICADO sin evidencia real enlazada
   (comprobador ejecutable, prueba automatizada o evento de auditoria verificado).
 * La siembra es idempotente y auditada con la accion 'CONTROL_SEED'.
+* La siembra falla cerrada: si un enlace riesgo-control no se puede crear, la
+  siembra se aborta con ControlSeedError en lugar de dejar la matriz de
+  trazabilidad incompleta sin rastro.
 """
 
 from __future__ import annotations
@@ -32,6 +35,17 @@ from database import (
 )
 
 SEED_AUDIT_ACTION = "CONTROL_SEED"
+
+
+class ControlSeedError(RuntimeError):
+    """Siembra abortada: la matriz de trazabilidad quedaria incompleta.
+
+    La siembra de controles es idempotente, igual que la del inventario de
+    activos. Un enlace riesgo-control que no se puede crear se reporta con esta
+    excepcion en lugar de ignorarse: el arranque falla cerrado y el operador ve
+    exactamente que par quedo sin vincular. Un reintento completa lo que falte.
+    """
+
 
 # Catalogo semilla de controles alineados con ISO 27001:2022, NIST SP 800-207 y CISA ZTM.
 SEED_CONTROLS: List[Dict[str, Any]] = [
@@ -283,23 +297,39 @@ def seed_control_catalog(db: Any) -> Dict[str, Any]:
     for risk_code, ctl_code, eff in SEED_RISK_CONTROL_LINKS:
         r_id = risks_map.get(risk_code)
         c_id = controls_map.get(ctl_code)
-        if r_id and c_id:
-            try:
-                risk_data = db.get_risk(r_id)
-                already_linked = any(c.get("id") == c_id for c in (risk_data.get("controls") or []))
-                if not already_linked:
-                    link_audit = {
-                        "action": "RISK_CONTROL_LINK",
-                        "actor": "SYSTEM",
-                        "role": "NONE",
-                        "status": "ALLOWED",
-                        "details": f"Vinculacion de riesgo {risk_code} con control {ctl_code} ({eff})",
-                        "ip": "127.0.0.1",
-                        "mfa_verified": False,
-                    }
-                    db.link_risk_control_with_audit_event(r_id, c_id, eff, link_audit)
-            except Exception:
-                pass
+
+        # Un enlace semilla sin extremo existente tambien deja la matriz
+        # incompleta: se trata como fallo, no como enlace omitido.
+        if not r_id or not c_id:
+            missing = "riesgo" if not r_id else "control"
+            raise ControlSeedError(
+                f"No se pudo crear el enlace {risk_code} -> {ctl_code} ({eff}): "
+                f"el {missing} semilla no existe en la base de datos"
+            )
+
+        try:
+            risk_data = db.get_risk(r_id)
+            if risk_data is None:
+                raise LookupError(f"el riesgo {risk_code} no se puede releer tras la siembra")
+            already_linked = any(c.get("id") == c_id for c in (risk_data.get("controls") or []))
+            if not already_linked:
+                link_audit = {
+                    "action": "RISK_CONTROL_LINK",
+                    "actor": "SYSTEM",
+                    "role": "NONE",
+                    "status": "ALLOWED",
+                    "details": f"Vinculacion de riesgo {risk_code} con control {ctl_code} ({eff})",
+                    "ip": "127.0.0.1",
+                    "mfa_verified": False,
+                }
+                db.link_risk_control_with_audit_event(r_id, c_id, eff, link_audit)
+        except Exception as exc:
+            # Fail-closed: nunca se ignora en silencio. El mensaje identifica el
+            # par concreto y la causa original para que el operador pueda actuar.
+            raise ControlSeedError(
+                f"Fallo al vincular el riesgo {risk_code} con el control {ctl_code} "
+                f"({eff}): {exc}"
+            ) from exc
 
     return {
         "created": created_codes,

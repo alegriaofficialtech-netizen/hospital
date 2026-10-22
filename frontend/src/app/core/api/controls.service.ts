@@ -84,14 +84,19 @@ export interface Control {
   updated_at: number | null;
 }
 
+/**
+ * Resumen del catalogo de controles (M5 / O3).
+ *
+ * Copia fiel de GET /api/v1/controls/summary (backend/database.py:
+ * get_controls_summary). El reparto por estado ya viene en by_status, asi que
+ * la interfaz deriva "verificados", "implementados" y "propuestos" de ahi
+ * (by_status['VERIFICADO'], etc.) y no de campos que la API no devuelve.
+ */
 export interface ControlSummary {
   total_controls: number;
   by_framework: Record<string, number>;
   by_status: Record<string, number>;
   compliance_percentage: number;
-  verified_count: number;
-  implemented_count: number;
-  proposed_count: number;
 }
 
 export interface ControlFilters {
@@ -103,7 +108,8 @@ export interface ControlFilters {
 export interface ControlsResponse {
   controls: Control[];
   summary: ControlSummary;
-  timestamp: number;
+  /** La API siempre devuelve el entorno de evidencia (F11). */
+  environment: string;
 }
 
 export interface ControlDetailResponse {
@@ -123,7 +129,8 @@ export interface CreateControlRequest {
   effectiveness?: ControlEffectiveness;
   evidence_type?: ControlEvidenceType | null;
   evidence_reference?: string | null;
-  synthetic?: number;
+  // La sinteticidad no se declara desde el cliente: la API la impone en el
+  // alta (regla de evidencia) e ignora cualquier valor enviado.
 }
 
 export interface UpdateControlRequest {
@@ -161,7 +168,7 @@ export class ControlsService {
 
   getSummary(): Observable<ControlSummary> {
     return this.http
-      .get<{ summary: ControlSummary }>(`${this.baseUrl}/summary`)
+      .get<{ summary: ControlSummary; environment: string }>(`${this.baseUrl}/summary`)
       .pipe(map((res) => res.summary));
   }
 

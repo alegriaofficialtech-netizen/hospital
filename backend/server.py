@@ -1735,6 +1735,11 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             self.send_json(400, invalid_body)
             return
 
+        # Regla de evidencia: todo lo que se crea por API es sintetico. La
+        # declaracion del cliente no decide la sinteticidad; se impone aqui,
+        # igual que en el alta de activos.
+        payload = {**payload, "synthetic": 1}
+
         errors = validate_risk(payload)
         if errors:
             record_audit_event(
@@ -1958,6 +1963,11 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             self.send_json(400, invalid_body)
             return
 
+        # Regla de evidencia: todo lo que se crea por API es sintetico. La
+        # declaracion del cliente no decide la sinteticidad; se impone aqui,
+        # igual que en el alta de riesgos y de activos.
+        payload = {**payload, "synthetic": 1}
+
         errors = validate_control(payload)
         if errors:
             record_audit_event(
@@ -2016,6 +2026,11 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             )
             self.send_json(400, invalid_body)
             return
+
+        # La sinteticidad de un control existente no se modifica: si el payload
+        # la declara, se ignora en el servidor. El registro creado por API ya
+        # quedo como sintetico y la actualizacion no puede cambiarlo.
+        payload = {k: v for k, v in payload.items() if k != "synthetic"}
 
         errors = validate_control(payload, partial=True)
         if errors:

@@ -50,7 +50,7 @@
             </div>
           </div>
           <div class="kpi-sub">
-            <span><strong>{{ s.verified_count }}</strong> de <strong>{{ s.total_controls }}</strong> controles formalmente verificados</span>
+            <span><strong>{{ s.by_status['VERIFICADO'] || 0 }}</strong> de <strong>{{ s.total_controls }}</strong> controles formalmente verificados</span>
           </div>
         </mat-card-content>
       </mat-card>
@@ -65,15 +65,15 @@
           <div class="status-counts">
             <div class="status-item">
               <span class="status-chip verificado">VERIFICADO</span>
-              <span class="status-num">{{ s.verified_count }}</span>
+              <span class="status-num">{{ s.by_status['VERIFICADO'] || 0 }}</span>
             </div>
             <div class="status-item">
               <span class="status-chip implementado">IMPLEMENTADO</span>
-              <span class="status-num">{{ s.implemented_count }}</span>
+              <span class="status-num">{{ s.by_status['IMPLEMENTADO'] || 0 }}</span>
             </div>
             <div class="status-item">
               <span class="status-chip propuesto">PROPUESTO</span>
-              <span class="status-num">{{ s.proposed_count }}</span>
+              <span class="status-num">{{ s.by_status['PROPUESTO'] || 0 }}</span>
             </div>
           </div>
         </mat-card-content>

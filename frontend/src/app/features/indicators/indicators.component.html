@@ -74,16 +74,16 @@
         <mat-card class="kpi-card">
           <mat-icon class="kpi-icon warning">warning</mat-icon>
           <span class="kpi-label">Riesgos Identificados (M4)</span>
-          <strong class="kpi-value">{{ rs.total }}</strong>
+          <strong class="kpi-value">{{ rs.total_risks }}</strong>
           <span class="kpi-hint">
-            {{ (rs.by_inherent_level['CRITICO'] || 0) + (rs.by_inherent_level['ALTO'] || 0) }} inherentes altos/críticos
+            {{ (rs.inherent_levels['CRITICO'] || 0) + (rs.inherent_levels['ALTO'] || 0) }} inherentes altos/críticos
           </span>
         </mat-card>
 
         <mat-card class="kpi-card">
           <mat-icon class="kpi-icon success">health_and_safety</mat-icon>
           <span class="kpi-label">Riesgos Residuales Controlados</span>
-          <strong class="kpi-value">{{ (rs.by_residual_level['BAJO'] || 0) + (rs.by_residual_level['MEDIO'] || 0) }}</strong>
+          <strong class="kpi-value">{{ (rs.residual_levels['BAJO'] || 0) + (rs.residual_levels['MEDIO'] || 0) }}</strong>
           <span class="kpi-hint">
             {{ rs.by_status['CONTROLADO'] || 0 }} bajo tratamiento activo
           </span>
@@ -96,7 +96,7 @@
           <span class="kpi-label">Cumplimiento de Controles (M5)</span>
           <strong class="kpi-value">{{ cs.compliance_percentage | number:'1.1-1' }}%</strong>
           <span class="kpi-hint">
-            {{ cs.verified_count }} de {{ cs.total_controls }} formalmente verificados
+            {{ cs.by_status['VERIFICADO'] || 0 }} de {{ cs.total_controls }} formalmente verificados
           </span>
         </mat-card>
 

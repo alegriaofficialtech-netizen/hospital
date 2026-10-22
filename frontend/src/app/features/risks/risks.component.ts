@@ -20,9 +20,11 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
-import { firstValueFrom, forkJoin } from 'rxjs';
-import { finalize } from 'rxjs/operators';
+import { firstValueFrom, forkJoin, of } from 'rxjs';
+import { catchError, finalize } from 'rxjs/operators';
 import { AuthService } from '../../core/auth/auth.service';
+import { Asset, AssetsService } from '../../core/api/assets.service';
+import { DiagnosticsService, SecurityFinding } from '../../core/api/diagnostics.service';
 import {
   RISK_CATEGORIES,
   RISK_LEVELS,
@@ -75,6 +77,8 @@ export interface MatrixCell {
 export class RisksComponent {
   private readonly api = inject(RisksService);
   private readonly controlsApi = inject(ControlsService);
+  private readonly assetsApi = inject(AssetsService);
+  private readonly diagnosticsApi = inject(DiagnosticsService);
   private readonly auth = inject(AuthService);
   private readonly snackBar = inject(MatSnackBar);
   private readonly destroyRef = inject(DestroyRef);
@@ -84,6 +88,11 @@ export class RisksComponent {
   readonly availableControls = signal<Control[]>([]);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
+
+  // Catalogos M3 y M2 para vincular el riesgo por id (trazabilidad O2)
+  readonly assets = signal<Asset[]>([]);
+  readonly findings = signal<SecurityFinding[]>([]);
+  readonly catalogsError = signal<string | null>(null);
 
   // Filtros
   readonly filterCategory = signal<RiskCategory | null>(null);
@@ -108,8 +117,8 @@ export class RisksComponent {
   formName = '';
   formDescription = '';
   formCategory: RiskCategory = 'software';
-  formAssetName = '';
-  formFindingChecker = '';
+  formAssetId: string | null = null;
+  formFindingId: string | null = null;
   formThreat = '';
   formVulnerability = '';
   formProbInherent = 3;
@@ -133,8 +142,11 @@ export class RisksComponent {
   readonly treatments = RISK_TREATMENTS;
   readonly statuses = RISK_STATUSES;
 
-  readonly canManage = computed(() =>
-    this.auth.hasAnyRole(['ROLE_PLATFORM_ADMIN', 'ROLE_SECURITY_AUDITOR']),
+  // Paridad con la politica MANAGE_RISKS del PEP (backend/jwt_validator.py):
+  // administrador de plataforma Y MFA acreditada. El auditor solo consulta, asi
+  // que no se le ofrecen acciones que la API rechaza con 403.
+  readonly canManage = computed(
+    () => this.auth.hasAnyRole(['ROLE_PLATFORM_ADMIN']) && this.auth.mfaVerified(),
   );
 
   readonly displayedColumns: string[] = [
@@ -188,6 +200,34 @@ export class RisksComponent {
 
   constructor() {
     this.loadData();
+    this.loadLinkableCatalogs();
+  }
+
+  /**
+   * Carga los catalogos M3 (activos) y M2 (hallazgos) para los selectores.
+   *
+   * Son opcionales: si una consulta falla, la matriz de riesgos sigue
+   * operativa, los selectores quedan vacios y el formulario lo advierte. No se
+   * completa ningun vinculo por cuenta propia.
+   */
+  loadLinkableCatalogs(): void {
+    this.catalogsError.set(null);
+    forkJoin({
+      assets: this.assetsApi.listAssets().pipe(catchError(() => of(null))),
+      findings: this.diagnosticsApi.listFindings({ limit: 200 }).pipe(catchError(() => of(null))),
+    })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: ({ assets, findings }) => {
+          this.assets.set(assets?.assets ?? []);
+          this.findings.set(findings?.findings ?? []);
+          if (!assets || !findings) {
+            this.catalogsError.set(
+              'No se pudieron cargar todos los catalogos M2/M3: los vinculos opcionales quedan sin opciones.',
+            );
+          }
+        },
+      });
   }
 
   loadData(): void {
@@ -234,7 +274,7 @@ export class RisksComponent {
       .subscribe({
         next: (res) => {
           this.selectedRisk.set(res.risk);
-          this.linkedControls.set(res.linked_controls || []);
+          this.linkedControls.set(res.risk.controls ?? []);
         },
         error: (err: unknown) => {
           this.snackBar.open(
@@ -257,8 +297,8 @@ export class RisksComponent {
     this.formName = '';
     this.formDescription = '';
     this.formCategory = 'software';
-    this.formAssetName = '';
-    this.formFindingChecker = '';
+    this.formAssetId = null;
+    this.formFindingId = null;
     this.formThreat = '';
     this.formVulnerability = '';
     this.formProbInherent = 3;
@@ -278,8 +318,8 @@ export class RisksComponent {
     this.formName = risk.name;
     this.formDescription = risk.description;
     this.formCategory = risk.category;
-    this.formAssetName = risk.asset_name || '';
-    this.formFindingChecker = risk.finding_checker || '';
+    this.formAssetId = risk.asset_id ?? null;
+    this.formFindingId = risk.finding_id ?? null;
     this.formThreat = risk.threat;
     this.formVulnerability = risk.vulnerability;
     this.formProbInherent = risk.probability_inherent;
@@ -309,8 +349,8 @@ export class RisksComponent {
         name: this.formName.trim(),
         description: this.formDescription.trim(),
         category: this.formCategory,
-        asset_name: this.formAssetName.trim() || null,
-        finding_checker: this.formFindingChecker.trim() || null,
+        asset_id: this.formAssetId,
+        finding_id: this.formFindingId,
         threat: this.formThreat.trim(),
         vulnerability: this.formVulnerability.trim(),
         probability_inherent: Number(this.formProbInherent),
@@ -320,7 +360,8 @@ export class RisksComponent {
         impact_residual: Number(this.formImpResidual),
         owner_role: this.formOwnerRole,
         status: this.formStatus,
-        synthetic: 1,
+        // synthetic no se declara desde el navegador: la API marca todo lo que
+        // crea como sintetico (regla de evidencia).
       };
 
       this.api
@@ -351,8 +392,8 @@ export class RisksComponent {
         name: this.formName.trim(),
         description: this.formDescription.trim(),
         category: this.formCategory,
-        asset_name: this.formAssetName.trim() || null,
-        finding_checker: this.formFindingChecker.trim() || null,
+        asset_id: this.formAssetId,
+        finding_id: this.formFindingId,
         threat: this.formThreat.trim(),
         vulnerability: this.formVulnerability.trim(),
         probability_inherent: Number(this.formProbInherent),
@@ -426,6 +467,31 @@ export class RisksComponent {
           );
         },
       });
+  }
+
+  /** Nombre del activo M3 vinculado; el id si el catalogo aun no lo resolvio. */
+  assetLabel(risk: Risk): string {
+    const id = risk.asset_id ?? null;
+    if (!id) return 'Sin activo asignado';
+    return this.assets().find((asset) => asset.id === id)?.name ?? id;
+  }
+
+  /**
+   * Hallazgo M2 vinculado resuelto por titulo, o comprobador de origen.
+   *
+   * Si finding_id apunta a un hallazgo real se muestra comprobador y titulo. Si
+   * todavia no hay hallazgo (el diagnostico no se ejecuto), se muestra el
+   * comprobador de origen declarado (source_checker) sin fingir un vinculo.
+   */
+  findingLabel(risk: Risk): string {
+    const id = risk.finding_id ?? null;
+    if (id) {
+      const finding = this.findings().find((item) => item.id === id);
+      return finding ? `${finding.checker_id} · ${finding.title}` : id;
+    }
+    const checker = risk.source_checker ?? null;
+    if (checker) return `Sin hallazgo ejecutado aun - comprobador de origen: ${checker}`;
+    return 'Sin hallazgo vinculado';
   }
 
   levelClass(level: RiskLevel): string {

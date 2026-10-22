@@ -120,8 +120,12 @@ export class ControlsComponent {
   readonly effectivenessLevels = CONTROL_EFFECTIVENESS_LEVELS;
   readonly evidenceTypes = CONTROL_EVIDENCE_TYPES;
 
-  readonly canManage = computed(() =>
-    this.auth.hasAnyRole(['ROLE_PLATFORM_ADMIN', 'ROLE_SECURITY_AUDITOR']),
+  // Paridad con la politica MANAGE_CONTROLS del PEP (backend/jwt_validator.py):
+  // administrador de plataforma Y MFA acreditada. El auditor solo consulta, asi
+  // que no se le ofrecen acciones que la API rechaza con 403. Ante la duda la
+  // interfaz es restrictiva: la API sigue siendo la autoridad.
+  readonly canManage = computed(
+    () => this.auth.hasAnyRole(['ROLE_PLATFORM_ADMIN']) && this.auth.mfaVerified(),
   );
 
   readonly displayedColumns: string[] = [
@@ -245,7 +249,8 @@ export class ControlsComponent {
         owner_role: this.formOwnerRole,
         status: this.formStatus,
         effectiveness: this.formEffectiveness,
-        synthetic: 1,
+        // La sinteticidad no se declara desde el navegador: la API impone
+        // synthetic = 1 en el alta de controles (regla de evidencia).
       };
 
       this.api

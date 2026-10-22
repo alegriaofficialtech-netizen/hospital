@@ -43,7 +43,7 @@
           <mat-card-subtitle>Catálogo activo M4</mat-card-subtitle>
         </mat-card-header>
         <mat-card-content>
-          <div class="kpi-value">{{ s.total }}</div>
+          <div class="kpi-value">{{ s.total_risks }}</div>
           <div class="kpi-sub">
             <span>{{ s.by_status['CONTROLADO'] || 0 }} controlados</span> ·
             <span>{{ s.by_status['IDENTIFICADO'] || 0 }} identificados</span>
@@ -59,11 +59,11 @@
         </mat-card-header>
         <mat-card-content>
           <div class="kpi-value danger-text">
-            {{ (s.by_inherent_level['CRITICO'] || 0) + (s.by_inherent_level['ALTO'] || 0) }}
+            {{ (s.inherent_levels['CRITICO'] || 0) + (s.inherent_levels['ALTO'] || 0) }}
           </div>
           <div class="kpi-sub">
-            <span>{{ s.by_inherent_level['CRITICO'] || 0 }} Críticos</span> ·
-            <span>{{ s.by_inherent_level['ALTO'] || 0 }} Altos</span>
+            <span>{{ s.inherent_levels['CRITICO'] || 0 }} Críticos</span> ·
+            <span>{{ s.inherent_levels['ALTO'] || 0 }} Altos</span>
           </div>
         </mat-card-content>
       </mat-card>
@@ -76,11 +76,11 @@
         </mat-card-header>
         <mat-card-content>
           <div class="kpi-value success-text">
-            {{ (s.by_residual_level['BAJO'] || 0) + (s.by_residual_level['MEDIO'] || 0) }}
+            {{ (s.residual_levels['BAJO'] || 0) + (s.residual_levels['MEDIO'] || 0) }}
           </div>
           <div class="kpi-sub">
-            <span>{{ s.by_residual_level['BAJO'] || 0 }} Bajos</span> ·
-            <span>{{ s.by_residual_level['MEDIO'] || 0 }} Medios</span>
+            <span>{{ s.residual_levels['BAJO'] || 0 }} Bajos</span> ·
+            <span>{{ s.residual_levels['MEDIO'] || 0 }} Medios</span>
           </div>
         </mat-card-content>
       </mat-card>
@@ -277,7 +277,7 @@
             <td mat-cell *matCellDef="let r">
               <div class="asset-cell">
                 <mat-icon class="mini-icon">dns</mat-icon>
-                <span>{{ r.asset_name || 'Sin activo asignado' }}</span>
+                <span>{{ assetLabel(r) }}</span>
               </div>
             </td>
           </ng-container>
@@ -374,11 +374,11 @@
             <div class="detail-row">
               <div class="detail-col">
                 <span class="detail-label">Activo M3 Vinculado:</span>
-                <span class="detail-val"><code>{{ risk.asset_name || 'Ninguno' }}</code></span>
+                <span class="detail-val"><code>{{ assetLabel(risk) }}</code></span>
               </div>
               <div class="detail-col">
-                <span class="detail-label">Comprobador M2:</span>
-                <span class="detail-val"><code>{{ risk.finding_checker || 'No aplica' }}</code></span>
+                <span class="detail-label">Hallazgo M2 Vinculado:</span>
+                <span class="detail-val"><code>{{ findingLabel(risk) }}</code></span>
               </div>
             </div>
             <div class="detail-row">
@@ -471,6 +471,13 @@
             </div>
           }
 
+          @if (catalogsError()) {
+            <div class="error-banner">
+              <mat-icon>info_outline</mat-icon>
+              <span>{{ catalogsError() }}</span>
+            </div>
+          }
+
           <div class="form-grid">
             @if (formMode() === 'create') {
               <mat-form-field appearance="outline">
@@ -500,7 +507,22 @@
 
             <mat-form-field appearance="outline">
               <mat-label>Activo M3 (Opcional)</mat-label>
-              <input matInput [(ngModel)]="formAssetName" placeholder="Ej: keycloak-iam, compose-f11">
+              <mat-select [(ngModel)]="formAssetId">
+                <mat-option [value]="null">Sin activo vinculado</mat-option>
+                @for (asset of assets(); track asset.id) {
+                  <mat-option [value]="asset.id">{{ asset.name }} ({{ asset.criticality }})</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Hallazgo M2 (Opcional)</mat-label>
+              <mat-select [(ngModel)]="formFindingId">
+                <mat-option [value]="null">Sin hallazgo vinculado</mat-option>
+                @for (finding of findings(); track finding.id) {
+                  <mat-option [value]="finding.id">[{{ finding.checker_id }}] {{ finding.title }}</mat-option>
+                }
+              </mat-select>
             </mat-form-field>
 
             <mat-form-field appearance="outline">

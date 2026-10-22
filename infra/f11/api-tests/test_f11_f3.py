@@ -16,6 +16,8 @@ import copy
 import hashlib
 import json
 import os
+import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -106,6 +108,291 @@ def token_usable(result, secret):
     return True
 
 
+class FailingLinkDatabase:
+    """Envuelve una base real y simula el fallo de un enlace concreto.
+
+    Solo intercepta la escritura del enlace: el resto de la API del gestor se
+    delega sin cambios para que la siembra se ejecute igual que en produccion.
+    """
+
+    def __init__(self, real, failing_control_id):
+        self._real = real
+        self._failing_control_id = failing_control_id
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def link_risk_control_with_audit_event(
+        self, risk_id, control_id, effectiveness, audit_event
+    ):
+        if control_id == self._failing_control_id:
+            raise RuntimeError("fallo simulado al escribir el enlace riesgo-control")
+        return self._real.link_risk_control_with_audit_event(
+            risk_id, control_id, effectiveness, audit_event
+        )
+
+
+SEED_AUDIT_EVENT = {
+    "action": "RISK_SEED",
+    "actor": "TEST",
+    "role": "NONE",
+    "status": "ALLOWED",
+    "details": "Preparacion de riesgos semilla sobre base temporal",
+    "ip": "127.0.0.1",
+    "mfa_verified": False,
+}
+
+
+class F3SeedIntegritySuite(unittest.TestCase):
+    """Integridad de la siembra de enlaces riesgo-control (M4 <-> M5, O2/O3).
+
+    Usa una base SQLite temporal en /tmp: no depende de la API ni de la base
+    viva del laboratorio.
+    """
+
+    def _temp_db(self):
+        from database import ClinicalDatabaseManager
+
+        directory = tempfile.mkdtemp(prefix="f3-seed-")
+        return ClinicalDatabaseManager(str(Path(directory) / "seed.db"))
+
+    def _seed_risks(self, db, codes):
+        db.insert_risks_with_audit_event(
+            [
+                {
+                    "code": code,
+                    "name": f"Riesgo semilla {code}",
+                    "category": "identidad",
+                    "threat": "Amenaza de prueba",
+                    "vulnerability": "Vulnerabilidad de prueba",
+                    "probability_inherent": 3,
+                    "impact_inherent": 3,
+                    "treatment": "MITIGAR",
+                    "status": "IDENTIFICADO",
+                    "synthetic": 0,
+                }
+                for code in codes
+            ],
+            SEED_AUDIT_EVENT,
+        )
+
+    def _insert_finding(self, db, checker_id):
+        """Inserta una ejecucion de diagnostico y un hallazgo real de un comprobador."""
+        from database import F11_ENVIRONMENT
+
+        stamp = int(time.time() * 1000)
+        run_id = f"RUN-{checker_id}-{stamp}"
+        db.insert_diagnostic_run(
+            {
+                "id": run_id,
+                "started_at": time.time(),
+                "status": "completed",
+                "checker_count": 1,
+                "passed": 0,
+                "failed": 1,
+                "warnings": 0,
+                "triggered_by": "test_suite",
+                "environment": F11_ENVIRONMENT,
+            }
+        )
+        finding_id = f"FND-{checker_id}-{stamp}"
+        db.insert_security_findings(
+            [
+                {
+                    "id": finding_id,
+                    "run_id": run_id,
+                    "checker_id": checker_id,
+                    "title": f"Hallazgo real de prueba {checker_id}",
+                    "objective": "O1",
+                    "severity": "high",
+                    "status": "failed",
+                    "asset_ref": "keycloak-iam",
+                    "evidence_command": "test-suite --checker " + checker_id,
+                    "evidence_output": "resultado sintetico de prueba",
+                    "evidence_source": "in_process",
+                    "remediation": "accion de prueba",
+                    "detected_at": time.time(),
+                }
+            ]
+        )
+        return finding_id
+
+    def test_28_seed_links_finding_id_to_real_finding(self):
+        """Con hallazgo previo, finding_id guarda el id real del hallazgo."""
+        from risk_management import seed_risk_catalog
+
+        db = self._temp_db()
+        finding_id = self._insert_finding(db, "KC_MFA_ON_ADMIN_IDENTITIES")
+
+        result = seed_risk_catalog(db)
+        self.assertFalse(result["already_seeded"])
+
+        risk = db.get_risk("RSK-F11-IAM-01")
+        self.assertIsNotNone(risk)
+        self.assertEqual(risk["finding_id"], finding_id)
+        self.assertEqual(risk["source_checker"], "KC_MFA_ON_ADMIN_IDENTITIES")
+
+        # El vinculo apunta a una fila real de security_findings, no a un texto.
+        con = sqlite3.connect(str(Path(db.db_path)))
+        try:
+            row = con.execute(
+                "SELECT id FROM security_findings WHERE id = ?;", (risk["finding_id"],)
+            ).fetchone()
+        finally:
+            con.close()
+        self.assertIsNotNone(row, "finding_id debe ser el id de un hallazgo real")
+        db.close()
+
+    def test_29_seed_keeps_finding_id_null_without_diagnostic(self):
+        """Sin hallazgo ejecutado, finding_id queda en null y el origen se declara aparte."""
+        from risk_management import seed_risk_catalog
+
+        db = self._temp_db()
+        seed_risk_catalog(db)
+
+        risk = db.get_risk("RSK-F11-IAM-01")
+        self.assertIsNotNone(risk)
+        self.assertIsNone(risk["finding_id"], "sin diagnostico no hay hallazgo que enlazar")
+        self.assertEqual(risk["source_checker"], "KC_MFA_ON_ADMIN_IDENTITIES")
+
+        # Otro comprobador distinto: el codigo tampoco se cuela en finding_id.
+        risk2 = db.get_risk("RSK-F11-CONT-02")
+        self.assertIsNone(risk2["finding_id"])
+        self.assertEqual(risk2["source_checker"], "CONTAINER_HARDENING")
+        db.close()
+
+    def test_30_migration_7_repairs_legacy_finding_id_on_populated_db(self):
+        """La migracion 7 mueve el codigo de comprobador a source_checker en bases ya pobladas."""
+        from database import ClinicalDatabaseManager
+
+        directory = tempfile.mkdtemp(prefix="f3-migration-")
+        path = str(Path(directory) / "migrated.db")
+        db = ClinicalDatabaseManager(path)
+
+        # Simula la siembra antigua: el codigo del comprobador dentro de finding_id
+        # y source_checker todavia sin existir como dato.
+        db.insert_risk_with_audit_event(
+            {
+                "code": "RSK-LEGACY-01",
+                "name": "Riesgo con vinculo antiguo",
+                "category": "identidad",
+                "threat": "Amenaza de prueba",
+                "vulnerability": "Vulnerabilidad de prueba",
+                "probability_inherent": 3,
+                "impact_inherent": 3,
+                "treatment": "MITIGAR",
+                "status": "IDENTIFICADO",
+                "finding_id": "KC_MFA_ON_ADMIN_IDENTITIES",
+                "synthetic": 0,
+            },
+            SEED_AUDIT_EVENT,
+        )
+        finding_id = self._insert_finding(db, "KC_MFA_ON_ADMIN_IDENTITIES")
+        db.close()
+
+        # Retroceder la marca de version fuerza a reejecutar la migracion 7.
+        con = sqlite3.connect(path)
+        con.execute("DELETE FROM schema_migrations WHERE version = 7;")
+        con.commit()
+        con.close()
+
+        db2 = ClinicalDatabaseManager(path)
+        repaired = db2.get_risk("RSK-LEGACY-01")
+        self.assertEqual(repaired["source_checker"], "KC_MFA_ON_ADMIN_IDENTITIES")
+        self.assertEqual(repaired["finding_id"], finding_id)
+        db2.close()
+
+        # Reabrir de nuevo no altera nada (migracion idempotente).
+        db3 = ClinicalDatabaseManager(path)
+        stable = db3.get_risk("RSK-LEGACY-01")
+        self.assertEqual(stable["source_checker"], "KC_MFA_ON_ADMIN_IDENTITIES")
+        self.assertEqual(stable["finding_id"], finding_id)
+        db3.close()
+
+    def test_33_control_update_ignores_synthetic_at_persistence_layer(self):
+        """La persistencia no cambia la sinteticidad de un control en la actualizacion."""
+        db = self._temp_db()
+        control, _ = db.insert_control_with_audit_event(
+            {
+                "code": "CTL-RB-SINT-01",
+                "framework": "ISO_27001_2022",
+                "clause_or_pillar": "A.5 Organizacional",
+                "name": "Control sintetico de prueba",
+                "description": "Prueba de inmutabilidad de la sinteticidad",
+                "owner_role": "ROLE_PLATFORM_ADMIN",
+                "status": "PROPUESTO",
+                "synthetic": 1,
+            },
+            SEED_AUDIT_EVENT,
+        )
+        self.assertEqual(control["synthetic"], 1)
+
+        updated, _ = db.update_control_with_audit_event(
+            control["id"],
+            {"description": "Intento de cambio de sinteticidad", "synthetic": 0},
+            SEED_AUDIT_EVENT,
+        )
+        self.assertEqual(updated["synthetic"], 1, "la actualizacion no puede cambiar la sinteticidad")
+        db.close()
+
+    def test_21_seed_aborts_when_a_risk_control_link_fails(self):
+        """Un enlace que falla aborta la siembra en lugar de dejar la matriz incompleta."""
+        from control_management import (
+            SEED_RISK_CONTROL_LINKS,
+            ControlSeedError,
+            seed_control_catalog,
+            seed_control_id,
+        )
+
+        db = self._temp_db()
+        risk_codes = sorted({link[0] for link in SEED_RISK_CONTROL_LINKS})
+        self._seed_risks(db, risk_codes)
+
+        # El tercer enlace semilla (RSK-F11-AUDIT-03 -> ISO-A.8.15) falla al
+        # escribir: la siembra no puede terminar "bien" con la matriz cortada.
+        failing_control_id = seed_control_id("ISO-A.8.15")
+        faulty = FailingLinkDatabase(db, failing_control_id)
+
+        with self.assertRaises(ControlSeedError) as raised:
+            seed_control_catalog(faulty)
+
+        message = str(raised.exception)
+        self.assertIn("RSK-F11-AUDIT-03", message)
+        self.assertIn("ISO-A.8.15", message)
+        self.assertIn("fallo simulado", message)
+
+        # La matriz quedo incompleta: la siembra aborto en vez de declarar exito.
+        con = sqlite3.connect(str(Path(db.db_path)))
+        try:
+            links = con.execute("SELECT COUNT(*) FROM risk_controls;").fetchone()[0]
+        finally:
+            con.close()
+        self.assertLess(links, len(SEED_RISK_CONTROL_LINKS))
+        db.close()
+
+    def test_22_seed_aborts_when_a_link_endpoint_is_missing(self):
+        """Un enlace semilla sin su riesgo tambien aborta: no se omite en silencio."""
+        from control_management import (
+            SEED_RISK_CONTROL_LINKS,
+            ControlSeedError,
+            seed_control_catalog,
+        )
+
+        db = self._temp_db()
+        risk_codes = sorted({link[0] for link in SEED_RISK_CONTROL_LINKS})
+        # Se omite RSK-F11-DATA-05: su enlace semilla no tiene extremo posible.
+        self._seed_risks(db, [code for code in risk_codes if code != "RSK-F11-DATA-05"])
+
+        with self.assertRaises(ControlSeedError) as raised:
+            seed_control_catalog(db)
+
+        message = str(raised.exception)
+        self.assertIn("RSK-F11-DATA-05", message)
+        self.assertIn("NIST-ZTA-T1", message)
+        self.assertIn("no existe en la base de datos", message)
+        db.close()
+
+
 class F3ApiSuite(unittest.TestCase):
     """Base comun de pruebas F3."""
 
@@ -150,6 +437,29 @@ class F3ApiSuite(unittest.TestCase):
                 return exc.code, json.loads(raw or b"{}")
             except json.JSONDecodeError:
                 return exc.code, {"raw": raw.decode("utf-8", "replace")}
+
+    def assert_distribution_matches_rows(self, reparto, rows, field):
+        """Comprueba que un reparto del resumen cuadra fila a fila con la lista.
+
+        No basta con que exista la clave: por cada nivel, estado, tratamiento,
+        categoria o marco, el conteo del resumen debe igualar el numero de filas
+        listadas con ese valor, y ninguna fila puede traer un valor fuera del
+        reparto (eso descuadraria el total en silencio).
+        """
+        conocidos = set(reparto)
+        for row in rows:
+            self.assertIn(
+                row.get(field),
+                conocidos,
+                f"{field}='{row.get(field)}' no aparece en el reparto del resumen",
+            )
+        for key, expected in reparto.items():
+            actual = sum(1 for row in rows if row.get(field) == key)
+            self.assertEqual(
+                expected,
+                actual,
+                f"el resumen declara {field}='{key}': {expected}, pero hay {actual} filas",
+            )
 
 
 class F3RisksApiSuite(F3ApiSuite):
@@ -286,6 +596,203 @@ class F3RisksApiSuite(F3ApiSuite):
         self.assertEqual(updated["status"], "CONTROLADO")
 
 
+    def test_34_summary_contract_matches_listed_rows(self):
+        """La forma de los resumenes coincide con la API y sus totales cuadran con las filas.
+
+        Cubre el defecto F3-D8: RiskSummary y ControlSummary deben declarar los
+        mismos campos que devuelve la API, y los indicadores que la interfaz
+        consume deben derivarse de ellos. Ademas de que exista la clave, los
+        numeros concuerdan: cada reparto suma el total, el total iguala las
+        filas listadas y el reparto coincide fila a fila con la lista.
+        """
+        token = self.token("auditor.test")
+
+        # --- Resumen de riesgos (M4, O2) ---
+        status, listado = self.call(token, "GET", "/api/v1/risks")
+        self.assertEqual(status, 200)
+        riesgos = listado["risks"]
+        status, dedicado = self.call(token, "GET", "/api/v1/risks/summary")
+        self.assertEqual(status, 200)
+        resumen = dedicado["summary"]
+
+        self.assertEqual(
+            set(resumen.keys()),
+            {
+                "total_risks",
+                "inherent_levels",
+                "residual_levels",
+                "by_status",
+                "by_treatment",
+                "by_category",
+            },
+            "la forma del resumen de riesgos no coincide con lo que consume la interfaz",
+        )
+
+        total = resumen["total_risks"]
+        self.assertEqual(total, len(riesgos), "total_risks debe cuadrar con las filas listadas")
+        self.assertEqual(
+            total,
+            listado["summary"]["total_risks"],
+            "el resumen dedicado y el embebido en la lista deben coincidir",
+        )
+
+        # Los KPI de la matriz 5x5 salen de inherent_levels y residual_levels.
+        for campo in ("inherent_levels", "residual_levels"):
+            self.assertTrue(resumen[campo], f"{campo} no puede venir vacio")
+            self.assertEqual(
+                sum(resumen[campo].values()),
+                total,
+                f"la suma de {campo} debe igualar total_risks",
+            )
+        for campo in ("by_status", "by_treatment", "by_category"):
+            self.assertEqual(
+                sum(resumen[campo].values()),
+                total,
+                f"la suma de {campo} debe igualar total_risks",
+            )
+
+        self.assert_distribution_matches_rows(
+            resumen["inherent_levels"], riesgos, "inherent_risk_level"
+        )
+        self.assert_distribution_matches_rows(
+            resumen["residual_levels"], riesgos, "residual_risk_level"
+        )
+        self.assert_distribution_matches_rows(resumen["by_status"], riesgos, "status")
+        self.assert_distribution_matches_rows(resumen["by_treatment"], riesgos, "treatment")
+        self.assert_distribution_matches_rows(resumen["by_category"], riesgos, "category")
+
+        # Indicadores que enlaza indicators.component.html: deben existir de verdad.
+        self.assertIn("CRITICO", resumen["inherent_levels"])
+        self.assertIn("ALTO", resumen["inherent_levels"])
+        self.assertIn("BAJO", resumen["residual_levels"])
+        self.assertIn("MEDIO", resumen["residual_levels"])
+        self.assertIn("CONTROLADO", resumen["by_status"])
+
+        # --- Resumen de controles (M5, O3) ---
+        status, listado = self.call(token, "GET", "/api/v1/controls")
+        self.assertEqual(status, 200)
+        controles = listado["controls"]
+        status, dedicado = self.call(token, "GET", "/api/v1/controls/summary")
+        self.assertEqual(status, 200)
+        resumen_c = dedicado["summary"]
+
+        self.assertEqual(
+            set(resumen_c.keys()),
+            {"total_controls", "by_framework", "by_status", "compliance_percentage"},
+            "el resumen de controles tiene campos que la API no devuelve o le faltan otros",
+        )
+
+        total_c = resumen_c["total_controls"]
+        self.assertEqual(
+            total_c, len(controles), "total_controls debe cuadrar con las filas listadas"
+        )
+        self.assertEqual(
+            total_c,
+            listado["summary"]["total_controls"],
+            "el resumen dedicado y el embebido en la lista deben coincidir",
+        )
+        self.assertEqual(
+            sum(resumen_c["by_framework"].values()),
+            total_c,
+            "la suma de by_framework debe igualar total_controls",
+        )
+        self.assertEqual(
+            sum(resumen_c["by_status"].values()),
+            total_c,
+            "la suma de by_status debe igualar total_controls",
+        )
+
+        self.assert_distribution_matches_rows(resumen_c["by_framework"], controles, "framework")
+        self.assert_distribution_matches_rows(resumen_c["by_status"], controles, "status")
+
+        # "verificados", "implementados" y "propuestos" se derivan de by_status.
+        for estado in ("VERIFICADO", "IMPLEMENTADO", "PROPUESTO"):
+            self.assertIn(estado, resumen_c["by_status"])
+        self.assertIsInstance(resumen_c["compliance_percentage"], (int, float))
+
+    def test_23_auditor_cannot_create_risk(self):
+        """El auditor consulta la matriz pero no puede darla de alta (403 por rol)."""
+        token = self.token("auditor.test")
+        status, body = self.call(token, "POST", "/api/v1/risks", {
+            "code": "RSK-AUDITOR-NO-PUEDE",
+            "name": "Riesgo que el auditor no puede crear",
+            "category": "software",
+            "threat": "Amenaza",
+            "vulnerability": "Vulnerabilidad",
+        })
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("code"), "PLATFORM_ADMIN_ROLE_REQUIRED")
+
+    def test_24_risk_keeps_asset_and_finding_ids(self):
+        """El alta por API persiste los vinculos O2 reales (asset_id y finding_id)."""
+        token = self.token("medico.test")
+        _, assets_body = self.call(token, "GET", "/api/v1/assets")
+        _, findings_body = self.call(token, "GET", "/api/v1/diagnostics/findings?limit=1")
+        asset_id = assets_body["assets"][0]["id"]
+        finding_id = findings_body["findings"][0]["id"]
+
+        test_code = f"RSK-LNK-{int(time.time()*1000)%10000000}"
+        status, body = self.call(token, "POST", "/api/v1/risks", {
+            "code": test_code,
+            "name": "Riesgo con vinculos O2 explicitos",
+            "description": "Comprueba la trazabilidad con M3 y M2",
+            "category": "identidad",
+            "asset_id": asset_id,
+            "finding_id": finding_id,
+            "threat": "Amenaza",
+            "vulnerability": "Vulnerabilidad",
+            "probability_inherent": 3,
+            "impact_inherent": 3,
+            "treatment": "MITIGAR",
+            "status": "IDENTIFICADO",
+        })
+        self.assertEqual(status, 201)
+        created = body["risk"]
+        self.assertEqual(created["asset_id"], asset_id)
+        self.assertEqual(created["finding_id"], finding_id)
+
+        status, body = self.call(token, "GET", f"/api/v1/risks/{created['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["risk"]["asset_id"], asset_id)
+        self.assertEqual(body["risk"]["finding_id"], finding_id)
+
+    def test_25_backend_forces_synthetic_on_risk_creation(self):
+        """La API marca el riesgo como sintetico aunque el cliente no lo declare."""
+        token = self.token("medico.test")
+        test_code = f"RSK-SINT-{int(time.time()*1000)%10000000}"
+        status, body = self.call(token, "POST", "/api/v1/risks", {
+            "code": test_code,
+            "name": "Riesgo sin declaracion de sinteticidad",
+            "description": "El servidor impone la regla de evidencia",
+            "category": "software",
+            "threat": "Amenaza",
+            "vulnerability": "Vulnerabilidad",
+            "probability_inherent": 2,
+            "impact_inherent": 2,
+            "treatment": "MITIGAR",
+            "status": "IDENTIFICADO",
+        })
+        self.assertEqual(status, 201)
+        self.assertEqual(body["risk"]["synthetic"], 1)
+
+    def test_26_frontend_gates_management_to_admin_with_mfa(self):
+        """La interfaz solo ofrece gestion con admin + MFA y no declara sinteticidad."""
+        features = ROOT / "frontend" / "src" / "app" / "features"
+        for relative in ("controls/controls.component.ts", "risks/risks.component.ts"):
+            source = (features / relative).read_text(encoding="utf-8")
+            match = re.search(r"readonly canManage = computed\(\s*(.*?)\s*\);", source, re.S)
+            self.assertIsNotNone(match, f"no se encontro canManage en {relative}")
+            condition = match.group(1)
+            self.assertIn("ROLE_PLATFORM_ADMIN", condition, relative)
+            self.assertNotIn("ROLE_SECURITY_AUDITOR", condition, relative)
+            self.assertIn("mfaVerified", condition, relative)
+
+        risks_source = (features / "risks/risks.component.ts").read_text(encoding="utf-8")
+        self.assertNotIn("synthetic:", risks_source, "el cliente no debe declarar sinteticidad")
+        self.assertIn("asset_id:", risks_source)
+        self.assertIn("finding_id:", risks_source)
+
+
 class F3ControlsApiSuite(F3ApiSuite):
     """Pruebas de la API de Gestion de Controles (M5, O3)."""
 
@@ -321,6 +828,20 @@ class F3ControlsApiSuite(F3ApiSuite):
         })
         self.assertEqual(status, 403)
         self.assertEqual(body.get("code"), "MFA_AUTHENTICATION_REQUIRED")
+
+    def test_27_auditor_cannot_create_control(self):
+        """El auditor consulta el catalogo pero no puede crear controles (403 por rol)."""
+        token = self.token("auditor.test")
+        status, body = self.call(token, "POST", "/api/v1/controls", {
+            "code": "CTL-AUDITOR-NO-PUEDE",
+            "framework": "ISO_27001_2022",
+            "clause_or_pillar": "A.5 Organizacional",
+            "name": "Control que el auditor no puede crear",
+            "description": "Debe ser rechazado por politica MANAGE_CONTROLS",
+            "status": "PROPUESTO",
+        })
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("code"), "PLATFORM_ADMIN_ROLE_REQUIRED")
 
     def test_10_admin_with_mfa_creates_synthetic_control(self):
         """El administrador con MFA da de alta un control propuesto."""
@@ -615,6 +1136,46 @@ class F3ControlsApiSuite(F3ApiSuite):
         self.assertGreaterEqual(len(controls), 1)
         for c in controls:
             self.assertEqual(c["framework"], "ISO_27001_2022")
+
+    def test_31_backend_forces_synthetic_on_control_creation(self):
+        """La API marca el control como sintetico aunque el cliente no lo declare."""
+        token = self.token("medico.test")
+        test_code = f"CTL-SINT-{int(time.time()*1000)%10000000}"
+        status, body = self.call(token, "POST", "/api/v1/controls", {
+            "code": test_code,
+            "framework": "ISO_27001_2022",
+            "clause_or_pillar": "A.5 Organizacional",
+            "name": "Control sin declaracion de sinteticidad",
+            "description": "El servidor impone la regla de evidencia",
+            "owner_role": "ROLE_PLATFORM_ADMIN",
+            "status": "PROPUESTO",
+        })
+        self.assertEqual(status, 201)
+        self.assertEqual(body["control"]["synthetic"], 1)
+
+    def test_32_control_update_cannot_change_synthetic(self):
+        """La actualizacion ignora el synthetic enviado por el cliente."""
+        token = self.token("medico.test")
+        test_code = f"CTL-SINT-UPD-{int(time.time()*1000)%10000000}"
+        status, body = self.call(token, "POST", "/api/v1/controls", {
+            "code": test_code,
+            "framework": "ISO_27001_2022",
+            "clause_or_pillar": "A.5 Organizacional",
+            "name": "Control para intentar cambiar la sinteticidad",
+            "description": "La actualizacion no debe poder cambiar la procedencia",
+            "owner_role": "ROLE_PLATFORM_ADMIN",
+            "status": "PROPUESTO",
+        })
+        self.assertEqual(status, 201)
+        ctl_id = body["control"]["id"]
+        self.assertEqual(body["control"]["synthetic"], 1)
+
+        status, body = self.call(token, "POST", f"/api/v1/controls/{ctl_id}", {
+            "description": "Intento de cambio de sinteticidad",
+            "synthetic": 0,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["control"]["synthetic"], 1)
 
 
 if __name__ == "__main__":

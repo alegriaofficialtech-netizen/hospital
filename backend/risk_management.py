@@ -7,6 +7,9 @@ inherente y residual, responsables funcionales, tratamientos y seguimiento.
 
 Reglas del modulo:
 * Los riesgos se apoyan en los activos reales de M3 y en los hallazgos de M2.
+* El vinculo O1 -> O2 (finding_id) apunta a un hallazgo real de
+  security_findings; el comprobador de origen declarado se guarda aparte en
+  source_checker y no se confunde con un hallazgo.
 * 'owner_role' es siempre un rol o equipo, nunca el nombre de una persona.
 * El calculo de riesgo es determinista: Score = Probabilidad (1..5) x Impacto (1..5).
 * La siembra es idempotente y auditada con la accion 'RISK_SEED'.
@@ -47,7 +50,7 @@ SEED_RISKS: List[Dict[str, Any]] = [
         ),
         "category": "identidad",
         "asset_name": "keycloak-iam",
-        "finding_checker": "KC_MFA_ON_ADMIN_IDENTITIES",
+        "source_checker": "KC_MFA_ON_ADMIN_IDENTITIES",
         "threat": "Suplantacion de credenciales administrativas en consola de gestion",
         "vulnerability": "Configuracion de identidades administrativas sin enforcement estricto de OTP",
         "probability_inherent": 4,
@@ -68,7 +71,7 @@ SEED_RISKS: List[Dict[str, Any]] = [
         ),
         "category": "infraestructura",
         "asset_name": "compose-f11",
-        "finding_checker": "CONTAINER_HARDENING",
+        "source_checker": "CONTAINER_HARDENING",
         "threat": "Escape de contenedor o persistencia de atacante mediante capacidades privilegiadas",
         "vulnerability": "Ausencia de restriccion cap_drop: ALL en el servicio keycloak",
         "probability_inherent": 3,
@@ -89,7 +92,7 @@ SEED_RISKS: List[Dict[str, Any]] = [
         ),
         "category": "datos",
         "asset_name": "audit-chain",
-        "finding_checker": "BACKEND_AUDIT_CHAIN_VALID",
+        "source_checker": "BACKEND_AUDIT_CHAIN_VALID",
         "threat": "Repudio de acciones clinicas o administrativas por alteracion de bitacora",
         "vulnerability": "Dependencia critica de la continuidad criptografica en SQLite",
         "probability_inherent": 4,
@@ -110,7 +113,7 @@ SEED_RISKS: List[Dict[str, Any]] = [
         ),
         "category": "software",
         "asset_name": "frontend-angular-bundle",
-        "finding_checker": "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD",
+        "source_checker": "FRONTEND_BUNDLE_HAS_NO_PASSWORD_FIELD",
         "threat": "Robo de credenciales de medicos o analistas mediante ataques Cross-Site Scripting (XSS)",
         "vulnerability": "Manejo inseguro de contrasenas en memoria de la aplicacion frontend",
         "probability_inherent": 4,
@@ -131,7 +134,7 @@ SEED_RISKS: List[Dict[str, Any]] = [
         ),
         "category": "datos",
         "asset_name": "clinical-sqlite-db",
-        "finding_checker": "DATA_FILES_OWNER_ONLY",
+        "source_checker": "DATA_FILES_OWNER_ONLY",
         "threat": "Exfiltracion directa de datos clinicos o tokens por usuarios o daemons del servidor",
         "vulnerability": "Permisos de lectura a grupos u otros usuarios en archivos sensibles",
         "probability_inherent": 3,
@@ -213,6 +216,22 @@ def validate_risk(payload: Dict[str, Any], partial: bool = False) -> List[str]:
     return errors
 
 
+def latest_finding_id(db: Any, checker_id: Optional[str]) -> Optional[str]:
+    """Id del hallazgo real mas reciente de un comprobador de M2, o None.
+
+    El vinculo O1 -> O2 solo apunta a filas reales de security_findings. Un
+    comprobador que todavia no se ejecuto no tiene hallazgo y NO se sustituye
+    por su codigo: en ese caso el vinculo queda en None y el codigo del
+    comprobador sigue visible en source_checker como origen declarado.
+    """
+    if not checker_id:
+        return None
+    findings = db.list_security_findings(checker_id=str(checker_id), limit=1)
+    if not findings:
+        return None
+    return str(findings[0]["id"])
+
+
 def seed_risk_catalog(db: Any) -> Dict[str, Any]:
     """Siembra idempotente y auditada del catalogo de riesgos."""
     if db.count_audit_events_by_action(SEED_AUDIT_ACTION) > 0:
@@ -230,7 +249,14 @@ def seed_risk_catalog(db: Any) -> Dict[str, Any]:
         item = dict(r)
         item["id"] = seed_risk_id(r["code"])
         item["asset_id"] = assets.get(r.get("asset_name"))
-        item["finding_id"] = r.get("finding_checker")
+        # Trazabilidad O1 -> O2 real: el origen declarado es el comprobador de
+        # M2 (source_checker), pero el vinculo (finding_id) apunta al id de un
+        # hallazgo real de security_findings. Si el diagnostico aun no se
+        # ejecuto y no hay hallazgo, el vinculo queda en None en lugar de
+        # guardar el codigo del comprobador como si fuera un hallazgo.
+        checker = r.get("source_checker")
+        item["source_checker"] = checker
+        item["finding_id"] = latest_finding_id(db, checker)
         payloads.append(item)
 
     audit_event = {

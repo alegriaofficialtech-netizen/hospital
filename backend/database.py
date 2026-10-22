@@ -23,7 +23,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ZERO_HASH = "0" * 64
 
 # Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
@@ -639,6 +639,37 @@ class ClinicalDatabaseManager:
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_control_evidences_control ON control_evidences(control_id);")
 
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (6, datetime('now'));")
+
+                if current_ver < 7:
+                    # Migracion 7: separa el origen declarado del vinculo real de
+                    # trazabilidad O1 -> O2. 'source_checker' guarda el codigo del
+                    # comprobador M2 que origina el riesgo; 'finding_id' queda
+                    # reservado al id de un hallazgo real de security_findings (o
+                    # NULL si el diagnostico aun no se ejecuto). Aditiva e
+                    # idempotente, igual que la migracion 4.
+                    columnas = {fila[1] for fila in cur.execute("PRAGMA table_info(risks);")}
+                    if "source_checker" not in columnas:
+                        cur.execute("ALTER TABLE risks ADD COLUMN source_checker TEXT;")
+                    # Reparacion idempotente sobre bases ya pobladas: donde la
+                    # siembra antigua guardo el codigo del comprobador dentro de
+                    # finding_id, ese codigo se mueve a source_checker y
+                    # finding_id se sustituye por el hallazgo real mas reciente de
+                    # ese comprobador (o NULL si todavia no hay hallazgo). No
+                    # inventa dato: se deriva de lo ya guardado y de la tabla de
+                    # hallazgos. Un id que ya apunta a un hallazgo real no se toca.
+                    cur.execute("""
+                        UPDATE risks
+                        SET source_checker = finding_id,
+                            finding_id = (
+                                SELECT f.id FROM security_findings f
+                                WHERE f.checker_id = risks.finding_id
+                                ORDER BY f.detected_at DESC LIMIT 1
+                            )
+                        WHERE source_checker IS NULL
+                          AND finding_id IS NOT NULL
+                          AND finding_id NOT IN (SELECT id FROM security_findings);
+                    """)
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (7, datetime('now'));")
 
 
                 cur.execute("COMMIT;")
@@ -1940,12 +1971,13 @@ class ClinicalDatabaseManager:
             cur.execute("""
                 INSERT INTO risks (
                     id, code, name, description, category, asset_id, finding_id,
+                    source_checker,
                     threat, vulnerability, probability_inherent, impact_inherent,
                     inherent_risk_score, inherent_risk_level, treatment,
                     probability_residual, impact_residual, residual_risk_score,
                     residual_risk_level, owner_role, status, synthetic,
                     created_at, updated_at, revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, (
                 risk_id,
                 code,
@@ -1954,6 +1986,7 @@ class ClinicalDatabaseManager:
                 category,
                 risk.get("asset_id"),
                 risk.get("finding_id"),
+                risk.get("source_checker"),
                 str(risk.get("threat") or "").strip(),
                 str(risk.get("vulnerability") or "").strip(),
                 prob_inh,
@@ -2013,6 +2046,7 @@ class ClinicalDatabaseManager:
         cur.execute("""
             UPDATE risks SET
                 name = ?, description = ?, category = ?, asset_id = ?, finding_id = ?,
+                source_checker = ?,
                 threat = ?, vulnerability = ?, probability_inherent = ?, impact_inherent = ?,
                 inherent_risk_score = ?, inherent_risk_level = ?, treatment = ?,
                 probability_residual = ?, impact_residual = ?, residual_risk_score = ?,
@@ -2024,6 +2058,7 @@ class ClinicalDatabaseManager:
             category,
             changes.get("asset_id", current_dict["asset_id"]),
             changes.get("finding_id", current_dict["finding_id"]),
+            changes.get("source_checker", current_dict["source_checker"]),
             str(changes.get("threat", current_dict["threat"])).strip(),
             str(changes.get("vulnerability", current_dict["vulnerability"])).strip(),
             prob_inh,
