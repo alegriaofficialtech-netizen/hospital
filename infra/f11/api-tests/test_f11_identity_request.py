@@ -69,6 +69,28 @@ class IdentityRequestSuite(unittest.TestCase):
         cls.credentials = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
         cls.setup_realm = load_setup_realm()
         cls._tokens = {}
+        # Reset defensive rate limits
+        try:
+            user = cls.credentials["users"]["medico.test"]
+            flow = cls.setup_realm.BrowserFlow(
+                KC_URL,
+                cls.credentials["realm"],
+                cls.credentials["clientId"],
+                cls.credentials["redirectUri"],
+            )
+            res = flow.login("medico.test", user["password"], user.get("totp_secret"))
+            token = res.get("access_token")
+            if token:
+                req = urllib.request.Request(
+                    BACKEND_URL + "/api/v1/admin/rate-limits/reset",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    resp.read()
+        except Exception:
+            pass
 
     def login(self, username):
         """Emite un token fresco para la cuenta indicada."""
@@ -115,13 +137,15 @@ class IdentityRequestSuite(unittest.TestCase):
         self._tokens[username] = result["access_token"]
         return self._tokens[username]
 
-    def post(self, path, body, token=None):
+    def post(self, path, body, token=None, headers=None):
         data = json.dumps(body).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        h = {"Content-Type": "application/json"}
+        if headers:
+            h.update(headers)
         if token:
-            headers["Authorization"] = "Bearer " + token
+            h["Authorization"] = "Bearer " + token
         request = urllib.request.Request(
-            BACKEND_URL + path, data=data, headers=headers, method="POST"
+            BACKEND_URL + path, data=data, headers=h, method="POST"
         )
         return self._send(request)
 
@@ -218,6 +242,7 @@ class IdentityRequestSuite(unittest.TestCase):
         """El canal publico se acota: no puede usarse como buzon de spam."""
         status = 0
         payload = {}
+        test_ip = f"198.51.100.{(int(time.time() * 1000) % 200) + 1}"
         for _ in range(12):
             status, payload = self.post(
                 "/api/v1/identity-requests",
@@ -226,6 +251,7 @@ class IdentityRequestSuite(unittest.TestCase):
                     "email": "limite@hospital.local",
                     "justification": "Solicitud repetida para comprobar el limite por origen.",
                 },
+                headers={"X-Forwarded-For": test_ip},
             )
             if status == 429:
                 break

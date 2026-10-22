@@ -293,3 +293,43 @@ Ver `odd/tasks/procedimiento-enrolamiento-admin.md`. No se retira `sgsi-admin`
 de `medico.test` hasta que `admin.test` se autentique con MFA y administre
 usuarios de verdad.
 
+
+## Cierre de F3: M4 Gestion de Riesgos y M5 Gestion de Controles (2026-10-22)
+
+F3 queda implementada y verificada sobre la rama `feat/f11-f3-risks-controls`, cubriendo los Objetivos O2 y O3 de la tesis doctoral.
+
+### Que hace F3
+
+**M4 Matriz de Riesgos y Vulnerabilidades (O2)**:
+- Modelo de evaluacion formal 5x5: calculo automatico y determinista de nivel inherente y residual (`BAJO`, `MEDIO`, `ALTO`, `CRITICO`).
+- Siembra automatica, idempotente y auditada de riesgos semilla asociados a los activos reales de M3 y hallazgos reales de M2 (`RSK-SEED`).
+- Trazabilidad biunivoca con controles de mitigacion y registro de revisiones incrementales.
+- Endpoints REST `/api/v1/risks`, `/api/v1/risks/summary`, `/api/v1/risks/{id}`, `/api/v1/risks/{id}/controls` con soporte para filtrado por categoria, estado, nivel de riesgo y activo.
+- RBAC estricto: lectura permitida para `ROLE_SECURITY_AUDITOR` y `ROLE_PLATFORM_ADMIN`; mutaciones y vinculaciones restringidas exclusivamente a `ROLE_PLATFORM_ADMIN` con MFA verificado (`MANAGE_RISKS`).
+
+**M5 Catalogo de Controles de Seguridad (O3)**:
+- Catalogo de controles alineado a marcos normativos internacionales: ISO/IEC 27001:2022, NIST SP 800-207 (Zero Trust) y CISA Zero Trust Maturity Model.
+- Regla de oro de evidencia: un control jamas puede pasar al estado `VERIFICADO` sin referencia real a evidencia observada (`test_suite`, `checker_run`, `audit_event`, etc.). Los intentos de transicion sin evidencia son rechazados con HTTP 400 (`CONTROL_EVIDENCE_MISSING`).
+- Verificacion formal de controles via `/api/v1/controls/{id}/verify` registrando evidencia fechada, fuente, resultado y operador con MFA.
+- Persistencia atomica de transacciones y auditoria (`run_clinical_transaction`): ante cualquier anomalia en el registro del evento criptografico SHA-256, la mutacion del control o riesgo es revertida integramente.
+- Endpoints REST `/api/v1/controls`, `/api/v1/controls/summary`, `/api/v1/controls/{id}`, `/api/v1/controls/{id}/verify` con soporte para filtrado por marco normativo, estado y rol responsable.
+
+**Aislamiento de Rate-Limiting entre Ejecuciones**:
+- Soporte para cabecera `X-Forwarded-For` en peticiones de loopback local para desacoplar suites de pruebas sinteticas (`test_f11_identity_request.py`).
+- Endpoint administrativo `/api/v1/admin/rate-limits/reset` protegido por rol de administracion de plataforma y MFA verificado para reinicio higienico de contadores en memoria.
+- Validacion consecutiva back-to-back: 5/5 pruebas aprobadas en dos ejecuciones sucesivas sin contaminacion por codigo 429.
+
+### Verificacion
+
+- **75/75 pruebas de API aprobadas** (55 de F2 + 20 nuevas de F3) en `infra/f11/run-api-tests.sh` ejecutadas contra la pila real en Debian (`servidor-1`).
+- **Migracion 6 aplicada**: tablas `risks`, `controls`, `risk_controls` y `control_evidences` con indices y claves foraneas consistentes.
+- **Atomicidad y rollback verificados por prueba destructiva**: `test_14` (riesgos), `test_16` (controles) y `test_17` (evidencias de verificacion) fuerzan fallos de auditoria demostrando reversion total sin registros huerfanos.
+- **Cadena criptografica SHA-256 integra**: `test_15` valida el encadenamiento de hashes `prev_hash` -> `hash` para la totalidad de eventos de auditoria emitidos durante las operaciones de F3.
+- **Integracion Frontend**:
+  - Rutas y componentes independientes para `/riesgos` y `/controles` con vistas de lista, filtros, matrices y dialogos de verificacion.
+  - Tarjetas de resumen en el dashboard de indicadores (`/indicadores`) consumiendo M4 y M5.
+  - Navegacion lateral en `shell.component.ts` con control de visibilidad por rol.
+
+### Estado de Cuentas y Privilegios
+
+- `medico.test` conserva privilegios provisionales de administracion con TOTP (`sgsi-admin` + `mfa-required`) hasta la inscripcion formal de MFA para `admin.test`.

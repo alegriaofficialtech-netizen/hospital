@@ -79,6 +79,18 @@ const NAV_ITEMS: readonly NavItem[] = [
       'ROLE_PLATFORM_ADMIN',
     ],
   },
+  {
+    label: 'Riesgos (M4)',
+    icon: 'warning',
+    route: '/riesgos',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Controles (M5)',
+    icon: 'verified',
+    route: '/controles',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
 ];
 
 @Component({

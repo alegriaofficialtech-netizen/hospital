@@ -82,6 +82,18 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/assets/assets.component').then((m) => m.AssetsComponent),
       },
+      {
+        path: 'riesgos',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/risks/risks.component').then((m) => m.RisksComponent),
+      },
+      {
+        path: 'controles',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/controls/controls.component').then((m) => m.ControlsComponent),
+      },
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
     ],
   },

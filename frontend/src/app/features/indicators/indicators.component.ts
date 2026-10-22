@@ -1,3 +1,4 @@
+import { DecimalPipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
@@ -17,6 +18,8 @@ import { forkJoin, of } from 'rxjs';
 import { finalize } from 'rxjs/operators';
 import { ApiService } from '../../core/api/api.service';
 import { AuthService } from '../../core/auth/auth.service';
+import { RisksService, RiskSummary } from '../../core/api/risks.service';
+import { ControlsService, ControlSummary } from '../../core/api/controls.service';
 import {
   AuditEventsResponse,
   ClinicalOrder,
@@ -43,6 +46,7 @@ interface DailyVolume {
   selector: 'app-indicators',
   standalone: true,
   imports: [
+    DecimalPipe,
     MatButtonModule,
     MatCardModule,
     MatIconModule,
@@ -56,14 +60,21 @@ interface DailyVolume {
 })
 export class IndicatorsComponent {
   private readonly api = inject(ApiService);
+  private readonly risksApi = inject(RisksService);
+  private readonly controlsApi = inject(ControlsService);
   private readonly auth = inject(AuthService);
   private readonly destroyRef = inject(DestroyRef);
 
   readonly orders = signal<ClinicalOrder[]>([]);
   readonly audit = signal<AuditEventsResponse | null>(null);
+  readonly riskSummary = signal<RiskSummary | null>(null);
+  readonly controlSummary = signal<ControlSummary | null>(null);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
 
+  readonly isAuditorOrAdmin = computed(() =>
+    this.auth.hasAnyRole(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN']),
+  );
   readonly isAuditor = computed(() => this.auth.hasAnyRole(['ROLE_SECURITY_AUDITOR']));
   readonly canViewOrders = computed(() =>
     this.auth.hasAnyRole(['ROLE_RECEPTION', 'ROLE_LAB_TECH', 'ROLE_PATHOLOGIST']),
@@ -121,16 +132,20 @@ export class IndicatorsComponent {
     this.error.set(null);
     const orders$ = this.canViewOrders() ? this.api.listOrders() : of(null);
     const audit$ = this.isAuditor() ? this.api.getAuditEvents() : of(null);
+    const risks$ = this.isAuditorOrAdmin() ? this.risksApi.getSummary() : of(null);
+    const controls$ = this.isAuditorOrAdmin() ? this.controlsApi.getSummary() : of(null);
 
-    forkJoin({ orders: orders$, audit: audit$ })
+    forkJoin({ orders: orders$, audit: audit$, risks: risks$, controls: controls$ })
       .pipe(
         finalize(() => this.loading.set(false)),
         takeUntilDestroyed(this.destroyRef),
       )
       .subscribe({
-        next: ({ orders, audit }) => {
+        next: ({ orders, audit, risks, controls }) => {
           this.orders.set(orders?.orders ?? []);
           this.audit.set(audit);
+          this.riskSummary.set(risks);
+          this.controlSummary.set(controls);
         },
         error: (error: unknown) => this.error.set(this.describeError(error)),
       });

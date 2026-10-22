@@ -1,0 +1,535 @@
+<section class="controls-page" aria-label="Gestión de Controles de Seguridad">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>verified_user</mat-icon>
+        <span>Módulo M5 · Tesis Doctoral Objetivo O3</span>
+      </div>
+      <h1>Gestión de Controles de Seguridad</h1>
+      <p class="subtitle">
+        Catálogo de controles alineados a ISO/IEC 27001:2022, NIST SP 800-207 y CISA Zero Trust Maturity Model, con evidencia técnica verificable y trazabilidad criptográfica.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (canManage()) {
+        <button mat-flat-button color="primary" (click)="openCreateForm()">
+          <mat-icon>add</mat-icon>
+          Nuevo Control
+        </button>
+      }
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- KPIs de Resumen -->
+  @if (summary(); as s) {
+    <div class="kpi-grid">
+      <mat-card class="kpi-card kpi-compliance">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">pie_chart</mat-icon>
+          <mat-card-title>Cumplimiento Verificado</mat-card-title>
+          <mat-card-subtitle>Controles con evidencia real</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="compliance-row">
+            <div class="kpi-value primary-text">{{ s.compliance_percentage | number:'1.1-1' }}%</div>
+            <div class="compliance-bar-wrap">
+              <mat-progress-bar mode="determinate" [value]="s.compliance_percentage"></mat-progress-bar>
+            </div>
+          </div>
+          <div class="kpi-sub">
+            <span><strong>{{ s.verified_count }}</strong> de <strong>{{ s.total_controls }}</strong> controles formalmente verificados</span>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card class="kpi-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar>rule</mat-icon>
+          <mat-card-title>Estado de Implementación</mat-card-title>
+          <mat-card-subtitle>Progreso del catálogo</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="status-counts">
+            <div class="status-item">
+              <span class="status-chip verificado">VERIFICADO</span>
+              <span class="status-num">{{ s.verified_count }}</span>
+            </div>
+            <div class="status-item">
+              <span class="status-chip implementado">IMPLEMENTADO</span>
+              <span class="status-num">{{ s.implemented_count }}</span>
+            </div>
+            <div class="status-item">
+              <span class="status-chip propuesto">PROPUESTO</span>
+              <span class="status-num">{{ s.proposed_count }}</span>
+            </div>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card class="kpi-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar>library_books</mat-icon>
+          <mat-card-title>Marcos Normativos</mat-card-title>
+          <mat-card-subtitle>Alineación técnica</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="framework-counts">
+            <div class="fw-item">
+              <span class="fw-name">ISO/IEC 27001:2022:</span>
+              <span class="fw-val">{{ s.by_framework['ISO_27001_2022'] || 0 }}</span>
+            </div>
+            <div class="fw-item">
+              <span class="fw-name">NIST SP 800-207:</span>
+              <span class="fw-val">{{ s.by_framework['NIST_SP_800_207'] || 0 }}</span>
+            </div>
+            <div class="fw-item">
+              <span class="fw-name">CISA ZTM:</span>
+              <span class="fw-val">{{ s.by_framework['CISA_ZTM'] || 0 }}</span>
+            </div>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Filtros -->
+  <mat-card class="filters-card">
+    <mat-card-content class="filters-content">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Marco Normativo</mat-label>
+        <mat-select [value]="filterFramework()" (selectionChange)="filterFramework.set($event.value); loadData()">
+          <mat-option [value]="null">Todos los marcos</mat-option>
+          @for (fw of frameworks; track fw) {
+            <mat-option [value]="fw">{{ frameworkLabel(fw) }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Estado de Control</mat-label>
+        <mat-select [value]="filterStatus()" (selectionChange)="filterStatus.set($event.value); loadData()">
+          <mat-option [value]="null">Todos los estados</mat-option>
+          @for (st of statuses; track st) {
+            <mat-option [value]="st">{{ st }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Efectividad</mat-label>
+        <mat-select [value]="filterEffectiveness()" (selectionChange)="filterEffectiveness.set($event.value); loadData()">
+          <mat-option [value]="null">Todas</mat-option>
+          @for (eff of effectivenessLevels; track eff) {
+            <mat-option [value]="eff">{{ eff }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Tabla de Controles -->
+  <mat-card class="table-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar color="primary">fact_check</mat-icon>
+      <mat-card-title>Catálogo de Controles Técnicos</mat-card-title>
+      <mat-card-subtitle>{{ controls().length }} controles recuperados de la API</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content class="table-content">
+      @if (loading()) {
+        <div class="loading-shade">
+          <mat-progress-spinner mode="indeterminate" diameter="48"></mat-progress-spinner>
+          <span>Consultando API de controles...</span>
+        </div>
+      }
+
+      <div class="table-responsive">
+        <table mat-table [dataSource]="controls()" class="mat-elevation-z0">
+          <!-- Columna Código -->
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef>Código</th>
+            <td mat-cell *matCellDef="let c">
+              <span class="code-badge">{{ c.code }}</span>
+              @if (c.synthetic) {
+                <span class="synthetic-tag" title="Control sintético para pruebas">SINT</span>
+              }
+            </td>
+          </ng-container>
+
+          <!-- Columna Marco -->
+          <ng-container matColumnDef="framework">
+            <th mat-header-cell *matHeaderCellDef>Marco</th>
+            <td mat-cell *matCellDef="let c">
+              <span class="framework-chip" [class]="c.framework.toLowerCase()">
+                {{ frameworkLabel(c.framework) }}
+              </span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Cláusula / Pilar -->
+          <ng-container matColumnDef="clause_or_pillar">
+            <th mat-header-cell *matHeaderCellDef>Cláusula / Pilar</th>
+            <td mat-cell *matCellDef="let c">
+              <span class="clause-text">{{ c.clause_or_pillar }}</span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Nombre -->
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef>Nombre del Control</th>
+            <td mat-cell *matCellDef="let c">
+              <div class="control-name">{{ c.name }}</div>
+              <div class="control-desc">{{ c.description }}</div>
+            </td>
+          </ng-container>
+
+          <!-- Columna Estado -->
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
+            <td mat-cell *matCellDef="let c">
+              <span class="status-chip" [class]="c.status.toLowerCase()">
+                {{ c.status }}
+              </span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Efectividad -->
+          <ng-container matColumnDef="effectiveness">
+            <th mat-header-cell *matHeaderCellDef>Efectividad</th>
+            <td mat-cell *matCellDef="let c">
+              <span class="eff-badge" [class]="c.effectiveness.toLowerCase()">
+                {{ c.effectiveness }}
+              </span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Evidencia -->
+          <ng-container matColumnDef="evidence">
+            <th mat-header-cell *matHeaderCellDef>Evidencia Vinculada</th>
+            <td mat-cell *matCellDef="let c">
+              @if (c.evidence_reference) {
+                <div class="evidence-cell">
+                  <mat-icon class="mini-icon verified-icon">verified</mat-icon>
+                  <span class="evidence-ref">{{ c.evidence_reference }}</span>
+                </div>
+              } @else {
+                <span class="no-evidence">Sin verificar</span>
+              }
+            </td>
+          </ng-container>
+
+          <!-- Columna Acciones -->
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let c">
+              <button mat-icon-button color="primary" (click)="selectControl(c)" title="Ver detalle y evidencias">
+                <mat-icon>visibility</mat-icon>
+              </button>
+              @if (canManage()) {
+                @if (c.status !== 'VERIFICADO') {
+                  <button mat-icon-button color="accent" (click)="openVerifyDialog(c)" title="Verificar con evidencia técnica">
+                    <mat-icon>task_alt</mat-icon>
+                  </button>
+                }
+                <button mat-icon-button (click)="openEditForm(c)" title="Modificar control">
+                  <mat-icon>edit</mat-icon>
+                </button>
+              }
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr mat-row *matRowDef="let row; columns: displayedColumns;" [class.selected-row]="selectedControl()?.id === row.id"></tr>
+        </table>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Panel de Detalle de Control -->
+  @if (selectedControl(); as ctl) {
+    <div class="detail-section">
+      <mat-card class="detail-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">policy</mat-icon>
+          <div class="header-content">
+            <mat-card-title>Detalle de Control: {{ ctl.code }}</mat-card-title>
+            <mat-card-subtitle>{{ frameworkLabel(ctl.framework) }} · {{ ctl.clause_or_pillar }}</mat-card-subtitle>
+          </div>
+          <button mat-icon-button (click)="clearSelection()" class="close-btn">
+            <mat-icon>close</mat-icon>
+          </button>
+        </mat-card-header>
+
+        <mat-card-content>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Descripción del Control:</span>
+              <p class="detail-desc">{{ ctl.description }}</p>
+            </div>
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Estado:</span>
+                <span class="status-chip" [class]="ctl.status.toLowerCase()">{{ ctl.status }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Efectividad Evaluada:</span>
+                <span class="eff-badge" [class]="ctl.effectiveness.toLowerCase()">{{ ctl.effectiveness }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Rol Responsable:</span>
+                <span class="detail-val">{{ ctl.owner_role }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Riesgos Mitigados (Bidireccionalidad O3 <-> O2) -->
+          <div class="detail-subblock">
+            <h3>
+              <mat-icon>healing</mat-icon>
+              Riesgos Mitigados por este Control (Objetivo O2)
+            </h3>
+            @if (linkedRisks().length === 0) {
+              <div class="empty-sub">
+                <span>Este control no tiene riesgos vinculados actualmente en la matriz M4.</span>
+              </div>
+            } @else {
+              <div class="risks-sublist">
+                @for (r of linkedRisks(); track r.id) {
+                  <div class="risk-subitem">
+                    <span class="code-badge">{{ r.code }}</span>
+                    <span class="subitem-name">{{ r.name }}</span>
+                    <span class="subitem-cat">{{ r.category }}</span>
+                    <span class="subitem-coverage">Cobertura: {{ r.coverage || 'TOTAL' }}</span>
+                  </div>
+                }
+              </div>
+            }
+          </div>
+
+          <!-- Historial de Verificaciones y Evidencias Técnicas -->
+          <div class="detail-subblock">
+            <div class="subblock-header">
+              <h3>
+                <mat-icon>verified</mat-icon>
+                Evidencias Técnicas Registradas (Criptográficamente Auditadas)
+              </h3>
+              @if (canManage() && ctl.status !== 'VERIFICADO') {
+                <button mat-stroked-button color="accent" (click)="openVerifyDialog(ctl)">
+                  <mat-icon>verified</mat-icon>
+                  Registrar Verificación
+                </button>
+              }
+            </div>
+
+            @if (loadingDetail()) {
+              <div class="mini-loading">
+                <mat-progress-spinner mode="indeterminate" diameter="24"></mat-progress-spinner>
+                <span>Cargando evidencias...</span>
+              </div>
+            } @else if (evidences().length === 0) {
+              <div class="empty-sub alert">
+                <mat-icon>info</mat-icon>
+                <span>No se han registrado verificaciones formales para este control todavía.</span>
+              </div>
+            } @else {
+              <div class="evidence-timeline">
+                @for (ev of evidences(); track ev.id) {
+                  <div class="evidence-card">
+                    <div class="ev-header">
+                      <span class="ev-type-badge">{{ ev.evidence_type }}</span>
+                      <span class="ev-date">{{ ev.verified_at * 1000 | date:'yyyy-MM-dd HH:mm:ss' }}</span>
+                      <span class="ev-user">Verificado por: <strong>{{ ev.verified_by }}</strong></span>
+                    </div>
+                    <div class="ev-body">
+                      <div class="ev-row">
+                        <strong>Origen:</strong> <code>{{ ev.evidence_source }}</code>
+                      </div>
+                      <div class="ev-row">
+                        <strong>Referencia:</strong> <code>{{ ev.reference_id }}</code>
+                      </div>
+                      <div class="ev-row">
+                        <strong>Resultado Observado:</strong> <span>{{ ev.observed_result }}</span>
+                      </div>
+                      <div class="ev-row ev-hash">
+                        <strong>Sello SHA-256:</strong> <code>{{ ev.hash }}</code>
+                      </div>
+                    </div>
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Diálogo de Verificación Formal de Control -->
+  @if (showVerifyDialog()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">verified</mat-icon>
+          <mat-card-title>Verificación Formal de Control: {{ verifyControlTarget?.code }}</mat-card-title>
+          <mat-card-subtitle>
+            Transición a estado VERIFICADO enlazando evidencia técnica real (comprobador M2 o prueba automatizada)
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (verifyError()) {
+            <div class="error-banner">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ verifyError() }}</span>
+            </div>
+          }
+
+          <div class="form-grid">
+            <mat-form-field appearance="outline">
+              <mat-label>Tipo de Evidencia</mat-label>
+              <mat-select [(ngModel)]="verifyEvidenceType">
+                <mat-option value="test_suite">test_suite (Suite de pruebas automatizada)</mat-option>
+                <mat-option value="checker">checker (Comprobador técnico M2)</mat-option>
+                <mat-option value="audit_log">audit_log (Registro de auditoría verificable)</mat-option>
+                <mat-option value="manual_review">manual_review (Revisión técnica de configuración)</mat-option>
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Origen de Evidencia (Script / Checker)</mat-label>
+              <input matInput [(ngModel)]="verifySource" placeholder="Ej: run-api-tests.sh, test_f11_f3.py" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Referencia Técnica / Test ID / Comprobador</mat-label>
+              <input matInput [(ngModel)]="verifyReferenceId" placeholder="Ej: test_12_admin_verifies_control_with_evidence o KC_MFA_ON_ADMIN_IDENTITIES" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Resultado Real Observado</mat-label>
+              <textarea matInput [(ngModel)]="verifyObservedResult" rows="3" placeholder="Descripción concisa y objetiva de la evidencia observada" required></textarea>
+            </mat-form-field>
+          </div>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelVerifyDialog()" [disabled]="verifying()">Cancelar</button>
+          <button mat-flat-button color="accent" (click)="confirmVerifyControl()" [disabled]="verifying()">
+            @if (verifying()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check_circle</mat-icon>
+            }
+            Confirmar y Firmar SHA-256
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Diálogo / Formulario de Creación / Edición de Control -->
+  @if (showForm()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">edit_note</mat-icon>
+          <mat-card-title>
+            {{ formMode() === 'create' ? 'Registrar Nuevo Control Propuesto' : 'Modificar Control ' + formCode }}
+          </mat-card-title>
+          <mat-card-subtitle>
+            Requiere rol administrativo con segundo factor TOTP
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (formError()) {
+            <div class="error-banner">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ formError() }}</span>
+            </div>
+          }
+
+          <div class="form-grid">
+            @if (formMode() === 'create') {
+              <mat-form-field appearance="outline">
+                <mat-label>Código del Control</mat-label>
+                <input matInput [(ngModel)]="formCode" placeholder="Ej: ISO-A.8.20 o NIST-TENET-8" required>
+              </mat-form-field>
+            }
+
+            <mat-form-field appearance="outline">
+              <mat-label>Marco Normativo</mat-label>
+              <mat-select [(ngModel)]="formFramework">
+                @for (fw of frameworks; track fw) {
+                  <mat-option [value]="fw">{{ frameworkLabel(fw) }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Cláusula o Pilar</mat-label>
+              <input matInput [(ngModel)]="formClause" placeholder="Ej: A.8 Gestión de accesos o Pilar 1: Identidad" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Nombre del Control</mat-label>
+              <input matInput [(ngModel)]="formName" placeholder="Título formal del control" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Descripción Detallada</mat-label>
+              <textarea matInput [(ngModel)]="formDescription" rows="3" placeholder="Requerimiento técnico del control" required></textarea>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Estado</mat-label>
+              <mat-select [(ngModel)]="formStatus">
+                <mat-option value="PROPUESTO">PROPUESTO</mat-option>
+                <mat-option value="IMPLEMENTADO">IMPLEMENTADO</mat-option>
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Efectividad</mat-label>
+              <mat-select [(ngModel)]="formEffectiveness">
+                @for (eff of effectivenessLevels; track eff) {
+                  <mat-option [value]="eff">{{ eff }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Rol Propietario</mat-label>
+              <input matInput [(ngModel)]="formOwnerRole">
+            </mat-form-field>
+          </div>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelForm()" [disabled]="saving()">Cancelar</button>
+          <button mat-flat-button color="primary" (click)="saveControl()" [disabled]="saving()">
+            @if (saving()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Guardar Control
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+</section>

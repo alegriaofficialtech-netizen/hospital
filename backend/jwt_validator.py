@@ -132,7 +132,7 @@ CLINICAL_ACTIONS = frozenset({"CREATE_ORDER", "VALIDATE_ORDER", "VIEW_ORDERS"})
 
 # Acciones que solo puede ejecutar una persona con MFA acreditada. Una cuenta
 # de servicio queda excluida igual que en las acciones clinicas.
-HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS"})
+HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS", "MANAGE_RISKS", "MANAGE_CONTROLS"})
 
 CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "CREATE_ORDER": {
@@ -186,6 +186,28 @@ CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
         "require_mfa": True,  # Operacion sensible: modifica el inventario que sostiene la evidencia
         "description": "Alta, actualizacion y evaluacion de activos del inventario",
     },
+
+    "VIEW_RISKS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": "Consulta de la matriz de riesgos y vulnerabilidades (M4)",
+    },
+    "MANAGE_RISKS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": "Alta, modificacion, evaluacion y vinculacion de riesgos (M4)",
+    },
+    "VIEW_CONTROLS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": "Consulta del catalogo de controles y su estado de verificacion (M5)",
+    },
+    "MANAGE_CONTROLS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": "Alta, modificacion, verificacion con evidencia y vinculacion de controles (M5)",
+    },
+
 }
 
 

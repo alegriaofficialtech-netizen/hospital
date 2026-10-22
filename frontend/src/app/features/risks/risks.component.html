@@ -1,0 +1,670 @@
+<section class="risks-page" aria-label="Gestión de Riesgos de Seguridad">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>shield</mat-icon>
+        <span>Módulo M4 · Tesis Doctoral Objetivo O2</span>
+      </div>
+      <h1>Gestión de Riesgos de Seguridad</h1>
+      <p class="subtitle">
+        Matriz de riesgos técnicos 5x5, análisis de amenazas, vulnerabilidades, tratamiento y cálculo de riesgo inherente y residual.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (canManage()) {
+        <button mat-flat-button color="primary" (click)="openCreateForm()">
+          <mat-icon>add</mat-icon>
+          Nuevo Riesgo
+        </button>
+      }
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- KPIs de Resumen -->
+  @if (summary(); as s) {
+    <div class="kpi-grid">
+      <mat-card class="kpi-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">assessment</mat-icon>
+          <mat-card-title>Total Riesgos</mat-card-title>
+          <mat-card-subtitle>Catálogo activo M4</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="kpi-value">{{ s.total }}</div>
+          <div class="kpi-sub">
+            <span>{{ s.by_status['CONTROLADO'] || 0 }} controlados</span> ·
+            <span>{{ s.by_status['IDENTIFICADO'] || 0 }} identificados</span>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card class="kpi-card kpi-danger">
+        <mat-card-header>
+          <mat-icon mat-card-avatar>warning</mat-icon>
+          <mat-card-title>Inherente Crítico/Alto</mat-card-title>
+          <mat-card-subtitle>Severidad inicial</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="kpi-value danger-text">
+            {{ (s.by_inherent_level['CRITICO'] || 0) + (s.by_inherent_level['ALTO'] || 0) }}
+          </div>
+          <div class="kpi-sub">
+            <span>{{ s.by_inherent_level['CRITICO'] || 0 }} Críticos</span> ·
+            <span>{{ s.by_inherent_level['ALTO'] || 0 }} Altos</span>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card class="kpi-card kpi-success">
+        <mat-card-header>
+          <mat-icon mat-card-avatar>verified</mat-icon>
+          <mat-card-title>Residual Controlado</mat-card-title>
+          <mat-card-subtitle>Tras mitigación M5</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="kpi-value success-text">
+            {{ (s.by_residual_level['BAJO'] || 0) + (s.by_residual_level['MEDIO'] || 0) }}
+          </div>
+          <div class="kpi-sub">
+            <span>{{ s.by_residual_level['BAJO'] || 0 }} Bajos</span> ·
+            <span>{{ s.by_residual_level['MEDIO'] || 0 }} Medios</span>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card class="kpi-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar>category</mat-icon>
+          <mat-card-title>Distribución</mat-card-title>
+          <mat-card-subtitle>Categorías técnicas</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="cat-chips">
+            @for (cat of categories; track cat) {
+              @if (s.by_category[cat]) {
+                <span class="cat-badge">
+                  <strong>{{ s.by_category[cat] }}</strong> {{ cat }}
+                </span>
+              }
+            }
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Matriz 5x5 de Riesgo y Filtros -->
+  <div class="matrix-section">
+    <mat-card class="matrix-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="primary">grid_on</mat-icon>
+        <mat-card-title>Matriz de Evaluación 5x5 (Probabilidad × Impacto)</mat-card-title>
+        <mat-card-subtitle>Criterio estándar SGSI Hospitalario: Crítico (15-25), Alto (10-14), Medio (5-9), Bajo (1-4)</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="matrix-wrapper">
+          <div class="y-axis-label">
+            <mat-icon>arrow_upward</mat-icon>
+            <span>PROBABILIDAD (1-5)</span>
+          </div>
+          <div class="matrix-container">
+            <div class="matrix-grid">
+              @for (row of matrixGrid(); track $index) {
+                <div class="matrix-row">
+                  <div class="row-header">P{{ row[0].probability }}</div>
+                  @for (cell of row; track cell.impact) {
+                    <div class="matrix-cell" [class]="levelClass(cell.level)">
+                      <div class="cell-score">{{ cell.score }}</div>
+                      <div class="cell-counts">
+                        @if (cell.inherentCount > 0) {
+                          <span class="badge-inh" title="Riesgos inherentes en esta celda">Inh: {{ cell.inherentCount }}</span>
+                        }
+                        @if (cell.residualCount > 0) {
+                          <span class="badge-res" title="Riesgos residuales tras controles">Res: {{ cell.residualCount }}</span>
+                        }
+                      </div>
+                    </div>
+                  }
+                </div>
+              }
+              <!-- Fila encabezado de columnas (Impacto) -->
+              <div class="matrix-row column-headers">
+                <div class="row-header"></div>
+                <div class="col-header">I1 Muy Bajo</div>
+                <div class="col-header">I2 Bajo</div>
+                <div class="col-header">I3 Medio</div>
+                <div class="col-header">I4 Alto</div>
+                <div class="col-header">I5 Muy Alto</div>
+              </div>
+            </div>
+            <div class="x-axis-label">
+              <span>IMPACTO (1-5)</span>
+              <mat-icon>arrow_forward</mat-icon>
+            </div>
+          </div>
+        </div>
+
+        <div class="matrix-legend">
+          <span class="legend-item"><span class="legend-box critico"></span> Crítico (15-25)</span>
+          <span class="legend-item"><span class="legend-box alto"></span> Alto (10-14)</span>
+          <span class="legend-item"><span class="legend-box medio"></span> Medio (5-9)</span>
+          <span class="legend-item"><span class="legend-box bajo"></span> Bajo (1-4)</span>
+          <span class="legend-note"><span class="badge-inh">Inh</span> = Inherente, <span class="badge-res">Res</span> = Residual</span>
+        </div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+
+  <!-- Barra de Filtros -->
+  <mat-card class="filters-card">
+    <mat-card-content class="filters-content">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Categoría</mat-label>
+        <mat-select [value]="filterCategory()" (selectionChange)="filterCategory.set($event.value); loadData()">
+          <mat-option [value]="null">Todas</mat-option>
+          @for (c of categories; track c) {
+            <mat-option [value]="c">{{ c }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Nivel Inherente</mat-label>
+        <mat-select [value]="filterInherentLevel()" (selectionChange)="filterInherentLevel.set($event.value); loadData()">
+          <mat-option [value]="null">Todos</mat-option>
+          @for (l of levels; track l) {
+            <mat-option [value]="l">{{ l }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Nivel Residual</mat-label>
+        <mat-select [value]="filterResidualLevel()" (selectionChange)="filterResidualLevel.set($event.value); loadData()">
+          <mat-option [value]="null">Todos</mat-option>
+          @for (l of levels; track l) {
+            <mat-option [value]="l">{{ l }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Tratamiento</mat-label>
+        <mat-select [value]="filterTreatment()" (selectionChange)="filterTreatment.set($event.value); loadData()">
+          <mat-option [value]="null">Todos</mat-option>
+          @for (t of treatments; track t) {
+            <mat-option [value]="t">{{ t }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Estado</mat-label>
+        <mat-select [value]="filterStatus()" (selectionChange)="filterStatus.set($event.value); loadData()">
+          <mat-option [value]="null">Todos</mat-option>
+          @for (st of statuses; track st) {
+            <mat-option [value]="st">{{ st }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Tabla de Riesgos -->
+  <mat-card class="table-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar color="primary">table_chart</mat-icon>
+      <mat-card-title>Inventario de Riesgos Técnicos</mat-card-title>
+      <mat-card-subtitle>{{ risks().length }} registros recuperados de la API</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content class="table-content">
+      @if (loading()) {
+        <div class="loading-shade">
+          <mat-progress-spinner mode="indeterminate" diameter="48"></mat-progress-spinner>
+          <span>Consultando API de riesgos...</span>
+        </div>
+      }
+
+      <div class="table-responsive">
+        <table mat-table [dataSource]="risks()" class="mat-elevation-z0">
+          <!-- Columna Código -->
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef>Código</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="code-badge">{{ r.code }}</span>
+              @if (r.synthetic) {
+                <span class="synthetic-tag" title="Riesgo sintético para pruebas">SINT</span>
+              }
+            </td>
+          </ng-container>
+
+          <!-- Columna Nombre -->
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef>Nombre y Amenaza</th>
+            <td mat-cell *matCellDef="let r">
+              <div class="risk-name">{{ r.name }}</div>
+              <div class="risk-threat">
+                <strong>Amenaza:</strong> {{ r.threat }}
+              </div>
+            </td>
+          </ng-container>
+
+          <!-- Columna Categoría -->
+          <ng-container matColumnDef="category">
+            <th mat-header-cell *matHeaderCellDef>Categoría</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="cat-pill">{{ r.category }}</span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Activo M3 -->
+          <ng-container matColumnDef="asset_name">
+            <th mat-header-cell *matHeaderCellDef>Activo M3</th>
+            <td mat-cell *matCellDef="let r">
+              <div class="asset-cell">
+                <mat-icon class="mini-icon">dns</mat-icon>
+                <span>{{ r.asset_name || 'Sin activo asignado' }}</span>
+              </div>
+            </td>
+          </ng-container>
+
+          <!-- Columna Riesgo Inherente -->
+          <ng-container matColumnDef="inherent_risk">
+            <th mat-header-cell *matHeaderCellDef>Inherente (P×I)</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="level-badge" [class]="levelClass(r.inherent_risk_level)">
+                {{ r.inherent_risk_level }} ({{ r.probability_inherent }}×{{ r.impact_inherent }}={{ r.inherent_risk_score }})
+              </span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Tratamiento -->
+          <ng-container matColumnDef="treatment">
+            <th mat-header-cell *matHeaderCellDef>Tratamiento</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="treatment-tag">{{ r.treatment }}</span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Riesgo Residual -->
+          <ng-container matColumnDef="residual_risk">
+            <th mat-header-cell *matHeaderCellDef>Residual (P×I)</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="level-badge" [class]="levelClass(r.residual_risk_level)">
+                {{ r.residual_risk_level }} ({{ r.probability_residual }}×{{ r.impact_residual }}={{ r.residual_risk_score }})
+              </span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Estado -->
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="status-chip">{{ r.status }}</span>
+            </td>
+          </ng-container>
+
+          <!-- Columna Acciones -->
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let r">
+              <button mat-icon-button color="primary" (click)="selectRisk(r)" title="Ver detalle y controles">
+                <mat-icon>visibility</mat-icon>
+              </button>
+              @if (canManage()) {
+                <button mat-icon-button (click)="openEditForm(r)" title="Modificar riesgo">
+                  <mat-icon>edit</mat-icon>
+                </button>
+              }
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr mat-row *matRowDef="let row; columns: displayedColumns;" [class.selected-row]="selectedRisk()?.id === row.id"></tr>
+        </table>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Panel de Detalle y Controles Mitigantes Vinculados -->
+  @if (selectedRisk(); as risk) {
+    <div class="detail-section">
+      <mat-card class="detail-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">security</mat-icon>
+          <div class="header-content">
+            <mat-card-title>Detalle de Riesgo: {{ risk.code }}</mat-card-title>
+            <mat-card-subtitle>{{ risk.name }} · Revisión {{ risk.revision }}</mat-card-subtitle>
+          </div>
+          <button mat-icon-button (click)="clearSelection()" class="close-btn">
+            <mat-icon>close</mat-icon>
+          </button>
+        </mat-card-header>
+
+        <mat-card-content>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Descripción:</span>
+              <p class="detail-desc">{{ risk.description }}</p>
+            </div>
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Amenaza:</span>
+                <span class="detail-val">{{ risk.threat }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Vulnerabilidad:</span>
+                <span class="detail-val">{{ risk.vulnerability }}</span>
+              </div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Activo M3 Vinculado:</span>
+                <span class="detail-val"><code>{{ risk.asset_name || 'Ninguno' }}</code></span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Comprobador M2:</span>
+                <span class="detail-val"><code>{{ risk.finding_checker || 'No aplica' }}</code></span>
+              </div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Responsable:</span>
+                <span class="detail-val">{{ risk.owner_role }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Tratamiento Asignado:</span>
+                <span class="detail-val"><strong>{{ risk.treatment }}</strong></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Controles mitigantes vinculados (Bidireccionalidad O2 <-> O3) -->
+          <div class="linked-controls-block">
+            <div class="controls-header">
+              <h3>
+                <mat-icon>link</mat-icon>
+                Controles Mitigantes Vinculados (M5 / Objetivo O3)
+              </h3>
+              @if (canManage()) {
+                <button mat-stroked-button color="accent" (click)="openLinkDialog()">
+                  <mat-icon>add_link</mat-icon>
+                  Vincular Control
+                </button>
+              }
+            </div>
+
+            @if (loadingDetail()) {
+              <div class="mini-loading">
+                <mat-progress-spinner mode="indeterminate" diameter="24"></mat-progress-spinner>
+                <span>Cargando controles asociados...</span>
+              </div>
+            } @else if (linkedControls().length === 0) {
+              <div class="empty-controls">
+                <mat-icon>warning_amber</mat-icon>
+                <span>Este riesgo no tiene controles mitigantes vinculados. Se recomienda asignar al menos un control de la norma ISO 27001, NIST o CISA.</span>
+              </div>
+            } @else {
+              <div class="controls-list">
+                @for (c of linkedControls(); track c.id) {
+                  <div class="control-item">
+                    <div class="control-main">
+                      <div class="control-badges">
+                        <span class="code-badge">{{ c.code }}</span>
+                        <span class="framework-tag">{{ c.framework }}</span>
+                        <span class="status-chip" [class.verificado]="c.status === 'VERIFICADO'">{{ c.status }}</span>
+                      </div>
+                      <div class="control-name">{{ c.name }}</div>
+                      <div class="control-clause">{{ c.clause_or_pillar }}</div>
+                    </div>
+                    <div class="control-meta">
+                      <span class="coverage-tag">Cobertura: {{ c.coverage || 'TOTAL' }}</span>
+                      @if (c.evidence_reference) {
+                        <span class="evidence-tag" title="Evidencia técnica real observada">
+                          <mat-icon class="mini-icon">verified</mat-icon> {{ c.evidence_reference }}
+                        </span>
+                      }
+                    </div>
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Diálogo / Formulario de Alta o Edición -->
+  @if (showForm()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">edit_note</mat-icon>
+          <mat-card-title>
+            {{ formMode() === 'create' ? 'Registrar Nuevo Riesgo Técnico' : 'Modificar Riesgo ' + formCode }}
+          </mat-card-title>
+          <mat-card-subtitle>
+            Requiere rol administrativo y confirmación de segundo factor (MFA TOTP)
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (formError()) {
+            <div class="error-banner">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ formError() }}</span>
+            </div>
+          }
+
+          <div class="form-grid">
+            @if (formMode() === 'create') {
+              <mat-form-field appearance="outline">
+                <mat-label>Código del Riesgo</mat-label>
+                <input matInput [(ngModel)]="formCode" placeholder="Ej: RSK-F11-APP-06" required>
+              </mat-form-field>
+            }
+
+            <mat-form-field appearance="outline">
+              <mat-label>Nombre del Riesgo</mat-label>
+              <input matInput [(ngModel)]="formName" placeholder="Descripción resumida" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Descripción Detallada</mat-label>
+              <textarea matInput [(ngModel)]="formDescription" rows="2"></textarea>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Categoría Técnica</mat-label>
+              <mat-select [(ngModel)]="formCategory">
+                @for (c of categories; track c) {
+                  <mat-option [value]="c">{{ c }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Activo M3 (Opcional)</mat-label>
+              <input matInput [(ngModel)]="formAssetName" placeholder="Ej: keycloak-iam, compose-f11">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Amenaza</mat-label>
+              <input matInput [(ngModel)]="formThreat" placeholder="Amenaza identificada" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Vulnerabilidad</mat-label>
+              <input matInput [(ngModel)]="formVulnerability" placeholder="Vulnerabilidad aprovechada" required>
+            </mat-form-field>
+
+            <!-- Evaluación Inherente -->
+            <div class="calc-box">
+              <h4>Riesgo Inherente (Severidad Inicial)</h4>
+              <div class="calc-fields">
+                <mat-form-field appearance="outline">
+                  <mat-label>Probabilidad (1-5)</mat-label>
+                  <mat-select [(ngModel)]="formProbInherent">
+                    <mat-option [value]="1">1 - Muy Baja</mat-option>
+                    <mat-option [value]="2">2 - Baja</mat-option>
+                    <mat-option [value]="3">3 - Media</mat-option>
+                    <mat-option [value]="4">4 - Alta</mat-option>
+                    <mat-option [value]="5">5 - Muy Alta</mat-option>
+                  </mat-select>
+                </mat-form-field>
+
+                <mat-form-field appearance="outline">
+                  <mat-label>Impacto (1-5)</mat-label>
+                  <mat-select [(ngModel)]="formImpInherent">
+                    <mat-option [value]="1">1 - Muy Bajo</mat-option>
+                    <mat-option [value]="2">2 - Bajo</mat-option>
+                    <mat-option [value]="3">3 - Medio</mat-option>
+                    <mat-option [value]="4">4 - Alto</mat-option>
+                    <mat-option [value]="5">5 - Muy Alto</mat-option>
+                  </mat-select>
+                </mat-form-field>
+
+                <div class="score-preview">
+                  Puntuación: <strong>{{ formProbInherent * formImpInherent }}</strong>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tratamiento y Evaluación Residual -->
+            <div class="calc-box">
+              <h4>Tratamiento y Riesgo Residual</h4>
+              <div class="calc-fields">
+                <mat-form-field appearance="outline">
+                  <mat-label>Tratamiento</mat-label>
+                  <mat-select [(ngModel)]="formTreatment">
+                    @for (t of treatments; track t) {
+                      <mat-option [value]="t">{{ t }}</mat-option>
+                    }
+                  </mat-select>
+                </mat-form-field>
+
+                <mat-form-field appearance="outline">
+                  <mat-label>Probabilidad Residual (1-5)</mat-label>
+                  <mat-select [(ngModel)]="formProbResidual">
+                    <mat-option [value]="1">1 - Muy Baja</mat-option>
+                    <mat-option [value]="2">2 - Baja</mat-option>
+                    <mat-option [value]="3">3 - Media</mat-option>
+                    <mat-option [value]="4">4 - Alta</mat-option>
+                    <mat-option [value]="5">5 - Muy Alta</mat-option>
+                  </mat-select>
+                </mat-form-field>
+
+                <mat-form-field appearance="outline">
+                  <mat-label>Impacto Residual (1-5)</mat-label>
+                  <mat-select [(ngModel)]="formImpResidual">
+                    <mat-option [value]="1">1 - Muy Bajo</mat-option>
+                    <mat-option [value]="2">2 - Bajo</mat-option>
+                    <mat-option [value]="3">3 - Medio</mat-option>
+                    <mat-option [value]="4">4 - Alto</mat-option>
+                    <mat-option [value]="5">5 - Muy Alto</mat-option>
+                  </mat-select>
+                </mat-form-field>
+
+                <div class="score-preview">
+                  Puntuación: <strong>{{ formProbResidual * formImpResidual }}</strong>
+                </div>
+              </div>
+            </div>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Estado</mat-label>
+              <mat-select [(ngModel)]="formStatus">
+                @for (st of statuses; track st) {
+                  <mat-option [value]="st">{{ st }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Rol Propietario</mat-label>
+              <input matInput [(ngModel)]="formOwnerRole">
+            </mat-form-field>
+          </div>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelForm()" [disabled]="saving()">Cancelar</button>
+          <button mat-flat-button color="primary" (click)="saveRisk()" [disabled]="saving()">
+            @if (saving()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Guardar en Base de Datos
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Diálogo de Vinculación de Control -->
+  @if (showLinkDialog()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">add_link</mat-icon>
+          <mat-card-title>Vincular Control Mitigante</mat-card-title>
+          <mat-card-subtitle>Asociar control formal de seguridad a {{ selectedRisk()?.code }}</mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Seleccionar Control del Catálogo M5</mat-label>
+            <mat-select [(ngModel)]="selectedControlId" required>
+              @for (c of availableControls(); track c.id) {
+                <mat-option [value]="c.id">
+                  [{{ c.framework }}] {{ c.code }} - {{ c.name }} ({{ c.status }})
+                </mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Cobertura del Control</mat-label>
+            <mat-select [(ngModel)]="linkCoverage">
+              <mat-option value="TOTAL">TOTAL (Mitiga completamente la causa raíz)</mat-option>
+              <mat-option value="PARCIAL">PARCIAL (Mitigación complementaria)</mat-option>
+            </mat-select>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Notas de Vinculación</mat-label>
+            <input matInput [(ngModel)]="linkNotes" placeholder="Razón o mecanismo de mitigación">
+          </mat-form-field>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelLinkDialog()" [disabled]="linking()">Cancelar</button>
+          <button mat-flat-button color="accent" (click)="confirmLinkControl()" [disabled]="linking() || !selectedControlId">
+            @if (linking()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>link</mat-icon>
+            }
+            Confirmar Vinculación
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+</section>

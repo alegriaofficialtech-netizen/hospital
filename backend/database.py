@@ -23,7 +23,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ZERO_HASH = "0" * 64
 
 # Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
@@ -69,6 +69,46 @@ def validate_asset_name(name: str) -> Optional[str]:
         return "el nombre solo admite letras, digitos, guion, guion bajo y punto"
     return None
 
+# Vocabulario de Gestion de Riesgos (M4)
+RISK_CATEGORIES = (
+    "identidad",
+    "acceso",
+    "software",
+    "datos",
+    "red",
+    "infraestructura",
+)
+RISK_LEVELS = ("BAJO", "MEDIO", "ALTO", "CRITICO")
+RISK_TREATMENTS = ("MITIGAR", "ACEPTAR", "TRANSFERIR", "EVITAR")
+RISK_STATUSES = ("IDENTIFICADO", "EN_TRATAMIENTO", "CONTROLADO", "ACEPTADO")
+
+# Vocabulario de Gestion de Controles (M5)
+CONTROL_FRAMEWORKS = ("ISO_27001_2022", "NIST_SP_800_207", "CISA_ZTM")
+CONTROL_STATUSES = ("PROPUESTO", "IMPLEMENTADO", "VERIFICADO")
+CONTROL_EFFECTIVENESS = ("PREVENTIVO", "DETECTIVO", "CORRECTIVO")
+CONTROL_EVIDENCE_TYPES = ("checker", "audit_event", "automated_test", "config_file", "none")
+
+
+def calculate_risk_level(probability: int, impact: int) -> Tuple[int, str]:
+    """Calcula el score (P x I) y nivel cualitativo segun matriz 5x5."""
+    try:
+        prob = int(probability)
+        imp = int(impact)
+    except (ValueError, TypeError):
+        prob, imp = 1, 1
+    prob = max(1, min(5, prob))
+    imp = max(1, min(5, imp))
+    score = prob * imp
+    if score >= 15:
+        level = "CRITICO"
+    elif score >= 10:
+        level = "ALTO"
+    elif score >= 5:
+        level = "MEDIO"
+    else:
+        level = "BAJO"
+    return score, level
+
 
 class DatabaseError(Exception):
     """Excepción base para errores de base de datos."""
@@ -87,6 +127,40 @@ class AssetAlreadyExistsError(DatabaseError):
 
 class AssetNotFoundError(DatabaseError):
     """El activo solicitado no existe en el inventario."""
+    pass
+
+class RiskValidationError(DatabaseError):
+    """El riesgo no cumple con el vocabulario o valores permitidos."""
+    pass
+
+
+class RiskAlreadyExistsError(DatabaseError):
+    """Ya existe un riesgo registrado con el mismo codigo."""
+    pass
+
+
+class RiskNotFoundError(DatabaseError):
+    """El riesgo solicitado no existe."""
+    pass
+
+
+class ControlValidationError(DatabaseError):
+    """El control no cumple con el marco, estado o validaciones requeridas."""
+    pass
+
+
+class ControlAlreadyExistsError(DatabaseError):
+    """Ya existe un control registrado con el mismo codigo."""
+    pass
+
+
+class ControlNotFoundError(DatabaseError):
+    """El control solicitado no existe."""
+    pass
+
+
+class ControlEvidenceMissingError(DatabaseError):
+    """Un control no puede marcarse como VERIFICADO sin evidencia real enlazada."""
     pass
 
 
@@ -476,6 +550,97 @@ class ClinicalDatabaseManager:
                     """)
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (5, datetime('now'));")
 
+                if current_ver < 6:
+                    # Migracion 6: modulo M4 Gestion de Riesgos y M5 Gestion de Controles.
+                    # Soporta O2 (matriz de riesgos y vulnerabilidades) y O3 (controles ISO 27001,
+                    # NIST SP 800-207 y CISA Zero Trust Maturity Model).
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS risks (
+                            id TEXT PRIMARY KEY,
+                            code TEXT NOT NULL UNIQUE,
+                            name TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            category TEXT NOT NULL,
+                            asset_id TEXT,
+                            finding_id TEXT,
+                            threat TEXT NOT NULL,
+                            vulnerability TEXT NOT NULL,
+                            probability_inherent INTEGER NOT NULL,
+                            impact_inherent INTEGER NOT NULL,
+                            inherent_risk_score INTEGER NOT NULL,
+                            inherent_risk_level TEXT NOT NULL,
+                            treatment TEXT NOT NULL,
+                            probability_residual INTEGER NOT NULL,
+                            impact_residual INTEGER NOT NULL,
+                            residual_risk_score INTEGER NOT NULL,
+                            residual_risk_level TEXT NOT NULL,
+                            owner_role TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            synthetic INTEGER NOT NULL DEFAULT 0,
+                            created_at REAL NOT NULL,
+                            updated_at REAL NOT NULL,
+                            revision INTEGER NOT NULL DEFAULT 1
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risks_category ON risks(category);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risks_status ON risks(status);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risks_inherent_level ON risks(inherent_risk_level);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risks_residual_level ON risks(residual_risk_level);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risks_asset_id ON risks(asset_id);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS controls (
+                            id TEXT PRIMARY KEY,
+                            code TEXT NOT NULL UNIQUE,
+                            framework TEXT NOT NULL,
+                            clause_or_pillar TEXT NOT NULL,
+                            name TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            owner_role TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            evidence_type TEXT,
+                            evidence_reference TEXT,
+                            verification_date TEXT,
+                            verification_notes TEXT,
+                            compliance_score REAL NOT NULL DEFAULT 0.0,
+                            synthetic INTEGER NOT NULL DEFAULT 0,
+                            created_at REAL NOT NULL,
+                            updated_at REAL NOT NULL,
+                            revision INTEGER NOT NULL DEFAULT 1
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_controls_framework ON controls(framework);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_controls_status ON controls(status);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_controls_owner_role ON controls(owner_role);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS risk_controls (
+                            risk_id TEXT NOT NULL,
+                            control_id TEXT NOT NULL,
+                            effectiveness TEXT NOT NULL,
+                            PRIMARY KEY (risk_id, control_id)
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risk_controls_risk ON risk_controls(risk_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_risk_controls_control ON risk_controls(control_id);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS control_evidences (
+                            id TEXT PRIMARY KEY,
+                            control_id TEXT NOT NULL,
+                            evidence_source TEXT NOT NULL,
+                            reference_id TEXT NOT NULL,
+                            observed_result TEXT NOT NULL,
+                            verified_by TEXT NOT NULL,
+                            verified_at REAL NOT NULL,
+                            verified_with_mfa INTEGER NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_control_evidences_control ON control_evidences(control_id);")
+
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (6, datetime('now'));")
+
+
                 cur.execute("COMMIT;")
             except Exception as e:
                 cur.execute("ROLLBACK;")
@@ -822,6 +987,17 @@ class ClinicalDatabaseManager:
         """Operación interna de creación, reutilizable en transacciones simples o auditadas."""
         self.insert_order_cursor(cur, order)
         return order
+
+
+    def _run_simple_read(self, operation: Callable[[sqlite3.Cursor], Any]) -> Any:
+        """Ejecuta una operacion de solo lectura sobre la base de datos."""
+        with self._lock:
+            conn = self._get_conn()
+            cur = conn.cursor()
+            try:
+                return operation(cur)
+            finally:
+                cur.close()
 
     def _run_simple_write(self, operation: Callable[[sqlite3.Cursor], Any]) -> Any:
         """Ejecuta una operación de escritura con transacción propia y rollback completo."""
@@ -1723,6 +1899,546 @@ class ClinicalDatabaseManager:
                 except Exception:
                     pass
                 self._conn = None
+
+
+
+    # --------------------------------------------------------------------------
+    # M4: GESTION DE RIESGOS (O2)
+    # --------------------------------------------------------------------------
+    def _insert_risk_cursor(self, cur: sqlite3.Cursor, risk: Dict[str, Any]) -> Dict[str, Any]:
+        """Inserta un riesgo en una transaccion ya abierta."""
+        code = str(risk.get("code") or "").strip()
+        name = str(risk.get("name") or "").strip()
+        category = str(risk.get("category") or "").strip().lower()
+        if category not in RISK_CATEGORIES:
+            raise RiskValidationError(
+                f"Categoria '{category}' no admitida. Opciones: {', '.join(RISK_CATEGORIES)}"
+            )
+        status = str(risk.get("status") or "IDENTIFICADO").strip().upper()
+        if status not in RISK_STATUSES:
+            raise RiskValidationError(
+                f"Estado '{status}' no admitido. Opciones: {', '.join(RISK_STATUSES)}"
+            )
+        treatment = str(risk.get("treatment") or "MITIGAR").strip().upper()
+        if treatment not in RISK_TREATMENTS:
+            raise RiskValidationError(
+                f"Tratamiento '{treatment}' no admitido. Opciones: {', '.join(RISK_TREATMENTS)}"
+            )
+
+        prob_inh = int(risk.get("probability_inherent") or 1)
+        imp_inh = int(risk.get("impact_inherent") or 1)
+        score_inh, level_inh = calculate_risk_level(prob_inh, imp_inh)
+
+        prob_res = int(risk.get("probability_residual") or prob_inh)
+        imp_res = int(risk.get("impact_residual") or imp_inh)
+        score_res, level_res = calculate_risk_level(prob_res, imp_res)
+
+        risk_id = str(risk.get("id") or ("RSK-" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:8].upper()))
+        now = time.time()
+
+        try:
+            cur.execute("""
+                INSERT INTO risks (
+                    id, code, name, description, category, asset_id, finding_id,
+                    threat, vulnerability, probability_inherent, impact_inherent,
+                    inherent_risk_score, inherent_risk_level, treatment,
+                    probability_residual, impact_residual, residual_risk_score,
+                    residual_risk_level, owner_role, status, synthetic,
+                    created_at, updated_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                risk_id,
+                code,
+                name,
+                str(risk.get("description") or "").strip(),
+                category,
+                risk.get("asset_id"),
+                risk.get("finding_id"),
+                str(risk.get("threat") or "").strip(),
+                str(risk.get("vulnerability") or "").strip(),
+                prob_inh,
+                imp_inh,
+                score_inh,
+                level_inh,
+                treatment,
+                prob_res,
+                imp_res,
+                score_res,
+                level_res,
+                str(risk.get("owner_role") or "ROLE_SECURITY_AUDITOR").strip(),
+                status,
+                1 if int(risk.get("synthetic") or 0) else 0,
+                float(risk.get("created_at") or now),
+                float(risk.get("updated_at") or now),
+                int(risk.get("revision") or 1),
+            ))
+        except sqlite3.IntegrityError as exc:
+            raise RiskAlreadyExistsError(f"Ya existe un riesgo con el codigo '{code}'.") from exc
+
+        cur.execute("SELECT * FROM risks WHERE id = ?;", (risk_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else {"id": risk_id}
+
+    def _update_risk_cursor(
+        self, cur: sqlite3.Cursor, risk_id: str, changes: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Actualiza un riesgo existente en una transaccion."""
+        cur.execute("SELECT * FROM risks WHERE id = ?;", (risk_id,))
+        current = cur.fetchone()
+        if not current:
+            raise RiskNotFoundError(f"Riesgo {risk_id} no encontrado")
+
+        current_dict = dict(current)
+        prob_inh = int(changes.get("probability_inherent") if "probability_inherent" in changes else current_dict["probability_inherent"])
+        imp_inh = int(changes.get("impact_inherent") if "impact_inherent" in changes else current_dict["impact_inherent"])
+        score_inh, level_inh = calculate_risk_level(prob_inh, imp_inh)
+
+        prob_res = int(changes.get("probability_residual") if "probability_residual" in changes else current_dict["probability_residual"])
+        imp_res = int(changes.get("impact_residual") if "impact_residual" in changes else current_dict["impact_residual"])
+        score_res, level_res = calculate_risk_level(prob_res, imp_res)
+
+        category = str(changes.get("category", current_dict["category"])).lower().strip()
+        if category not in RISK_CATEGORIES:
+            raise RiskValidationError(f"Categoria '{category}' no admitida")
+        status = str(changes.get("status", current_dict["status"])).upper().strip()
+        if status not in RISK_STATUSES:
+            raise RiskValidationError(f"Estado '{status}' no admitido")
+        treatment = str(changes.get("treatment", current_dict["treatment"])).upper().strip()
+        if treatment not in RISK_TREATMENTS:
+            raise RiskValidationError(f"Tratamiento '{treatment}' no admitido")
+
+        now = time.time()
+        new_rev = int(current_dict.get("revision") or 1) + 1
+
+        cur.execute("""
+            UPDATE risks SET
+                name = ?, description = ?, category = ?, asset_id = ?, finding_id = ?,
+                threat = ?, vulnerability = ?, probability_inherent = ?, impact_inherent = ?,
+                inherent_risk_score = ?, inherent_risk_level = ?, treatment = ?,
+                probability_residual = ?, impact_residual = ?, residual_risk_score = ?,
+                residual_risk_level = ?, owner_role = ?, status = ?, updated_at = ?, revision = ?
+            WHERE id = ?;
+        """, (
+            str(changes.get("name", current_dict["name"])).strip(),
+            str(changes.get("description", current_dict["description"])).strip(),
+            category,
+            changes.get("asset_id", current_dict["asset_id"]),
+            changes.get("finding_id", current_dict["finding_id"]),
+            str(changes.get("threat", current_dict["threat"])).strip(),
+            str(changes.get("vulnerability", current_dict["vulnerability"])).strip(),
+            prob_inh,
+            imp_inh,
+            score_inh,
+            level_inh,
+            treatment,
+            prob_res,
+            imp_res,
+            score_res,
+            level_res,
+            str(changes.get("owner_role", current_dict["owner_role"])).strip(),
+            status,
+            now,
+            new_rev,
+            risk_id,
+        ))
+
+        cur.execute("SELECT * FROM risks WHERE id = ?;", (risk_id,))
+        return dict(cur.fetchone())
+
+    def insert_risk_with_audit_event(
+        self, risk: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Da de alta un riesgo y su auditoria en una sola transaccion atomica."""
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_risk_cursor(cur, risk), audit_event
+        )
+
+    def insert_risks_with_audit_event(
+        self, risks: List[Dict[str, Any]], audit_event: Dict[str, Any]
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        """Inserta lote de riesgos con auditoria atomica (para siembra)."""
+        def operation(cur: sqlite3.Cursor) -> List[str]:
+            created: List[str] = []
+            for r in risks:
+                self._insert_risk_cursor(cur, r)
+                created.append(str(r.get("code") or ""))
+            return created
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def update_risk_with_audit_event(
+        self, risk_id: str, changes: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Actualiza un riesgo y audita el cambio atomicamente."""
+        return self.run_clinical_transaction(
+            lambda cur: self._update_risk_cursor(cur, risk_id, changes), audit_event
+        )
+
+    def get_risk(self, risk_id_or_code: str) -> Optional[Dict[str, Any]]:
+        """Recupera un riesgo y sus controles vinculados."""
+        def op(cur: sqlite3.Cursor) -> Optional[Dict[str, Any]]:
+            cur.execute("SELECT * FROM risks WHERE id = ? OR code = ?;", (risk_id_or_code, risk_id_or_code))
+            row = cur.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            cur.execute("""
+                SELECT c.*, rc.effectiveness
+                FROM controls c
+                JOIN risk_controls rc ON c.id = rc.control_id
+                WHERE rc.risk_id = ?;
+            """, (result["id"],))
+            result["controls"] = [dict(r) for r in cur.fetchall()]
+            return result
+        return self._run_simple_read(op)
+
+    def list_risks(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Lista riesgos aplicando filtros opcionales."""
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            query = "SELECT * FROM risks WHERE 1=1"
+            params: List[Any] = []
+            if filters:
+                if filters.get("category"):
+                    query += " AND category = ?"
+                    params.append(filters["category"])
+                if filters.get("status"):
+                    query += " AND status = ?"
+                    params.append(filters["status"])
+                if filters.get("inherent_risk_level"):
+                    query += " AND inherent_risk_level = ?"
+                    params.append(filters["inherent_risk_level"])
+                if filters.get("residual_risk_level"):
+                    query += " AND residual_risk_level = ?"
+                    params.append(filters["residual_risk_level"])
+                if filters.get("asset_id"):
+                    query += " AND asset_id = ?"
+                    params.append(filters["asset_id"])
+            query += " ORDER BY inherent_risk_score DESC, created_at DESC;"
+            cur.execute(query, tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
+
+    def get_risks_summary(self) -> Dict[str, Any]:
+        """Calcula el resumen de metricas de riesgos para el dashboard e indicadores (M8)."""
+        def op(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            cur.execute("SELECT COUNT(*) FROM risks;")
+            total = cur.fetchone()[0]
+
+            cur.execute("SELECT inherent_risk_level, COUNT(*) FROM risks GROUP BY inherent_risk_level;")
+            inherent = {k: v for k, v in cur.fetchall()}
+
+            cur.execute("SELECT residual_risk_level, COUNT(*) FROM risks GROUP BY residual_risk_level;")
+            residual = {k: v for k, v in cur.fetchall()}
+
+            cur.execute("SELECT status, COUNT(*) FROM risks GROUP BY status;")
+            by_status = {k: v for k, v in cur.fetchall()}
+
+            cur.execute("SELECT treatment, COUNT(*) FROM risks GROUP BY treatment;")
+            by_treatment = {k: v for k, v in cur.fetchall()}
+
+            cur.execute("SELECT category, COUNT(*) FROM risks GROUP BY category;")
+            by_category = {k: v for k, v in cur.fetchall()}
+
+            return {
+                "total_risks": total,
+                "inherent_levels": {level: inherent.get(level, 0) for level in RISK_LEVELS},
+                "residual_levels": {level: residual.get(level, 0) for level in RISK_LEVELS},
+                "by_status": {st: by_status.get(st, 0) for st in RISK_STATUSES},
+                "by_treatment": {tr: by_treatment.get(tr, 0) for tr in RISK_TREATMENTS},
+                "by_category": {cat: by_category.get(cat, 0) for cat in RISK_CATEGORIES},
+            }
+        return self._run_simple_read(op)
+
+    # --------------------------------------------------------------------------
+    # M5: GESTION DE CONTROLES (O3)
+    # --------------------------------------------------------------------------
+    def _insert_control_cursor(self, cur: sqlite3.Cursor, control: Dict[str, Any]) -> Dict[str, Any]:
+        """Inserta un control con validacion del marco y del estado de evidencia."""
+        code = str(control.get("code") or "").strip()
+        framework = str(control.get("framework") or "").strip()
+        if framework not in CONTROL_FRAMEWORKS:
+            raise ControlValidationError(
+                f"Marco '{framework}' no admitido. Opciones: {', '.join(CONTROL_FRAMEWORKS)}"
+            )
+        status = str(control.get("status") or "PROPUESTO").strip().upper()
+        if status not in CONTROL_STATUSES:
+            raise ControlValidationError(
+                f"Estado '{status}' no admitido. Opciones: {', '.join(CONTROL_STATUSES)}"
+            )
+
+        evidence_type = control.get("evidence_type")
+        evidence_reference = control.get("evidence_reference")
+
+        # Regla central de evidencia F3: un control NO puede ser VERIFICADO sin evidencia real
+        if status == "VERIFICADO":
+            if not evidence_type or evidence_type == "none" or not evidence_reference:
+                raise ControlEvidenceMissingError(
+                    f"El control {code} no puede marcarse como VERIFICADO sin evidencia real enlazada."
+                )
+
+        control_id = str(control.get("id") or ("CTL-" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:8].upper()))
+        now = time.time()
+        score = 1.0 if status == "VERIFICADO" else (0.5 if status == "IMPLEMENTADO" else 0.0)
+        if "compliance_score" in control:
+            score = float(control["compliance_score"])
+
+        v_date = str(control.get("verification_date") or ("" if status != "VERIFICADO" else time.strftime("%Y-%m-%d", time.gmtime())))
+
+        try:
+            cur.execute("""
+                INSERT INTO controls (
+                    id, code, framework, clause_or_pillar, name, description,
+                    owner_role, status, evidence_type, evidence_reference,
+                    verification_date, verification_notes, compliance_score,
+                    synthetic, created_at, updated_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                control_id,
+                code,
+                framework,
+                str(control.get("clause_or_pillar") or "").strip(),
+                str(control.get("name") or "").strip(),
+                str(control.get("description") or "").strip(),
+                str(control.get("owner_role") or "ROLE_SECURITY_AUDITOR").strip(),
+                status,
+                evidence_type,
+                evidence_reference,
+                v_date,
+                str(control.get("verification_notes") or ""),
+                score,
+                1 if int(control.get("synthetic") or 0) else 0,
+                float(control.get("created_at") or now),
+                float(control.get("updated_at") or now),
+                int(control.get("revision") or 1),
+            ))
+        except sqlite3.IntegrityError as exc:
+            raise ControlAlreadyExistsError(f"Ya existe un control con el codigo '{code}'.") from exc
+
+        cur.execute("SELECT * FROM controls WHERE id = ?;", (control_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else {"id": control_id}
+
+    def _update_control_cursor(
+        self, cur: sqlite3.Cursor, control_id: str, changes: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Actualiza un control existente asegurando las reglas de evidencia."""
+        cur.execute("SELECT * FROM controls WHERE id = ?;", (control_id,))
+        current = cur.fetchone()
+        if not current:
+            raise ControlNotFoundError(f"Control {control_id} no encontrado")
+
+        current_dict = dict(current)
+        framework = str(changes.get("framework", current_dict["framework"])).strip()
+        if framework not in CONTROL_FRAMEWORKS:
+            raise ControlValidationError(f"Marco '{framework}' no admitido")
+        status = str(changes.get("status", current_dict["status"])).upper().strip()
+        if status not in CONTROL_STATUSES:
+            raise ControlValidationError(f"Estado '{status}' no admitido")
+
+        evidence_type = changes.get("evidence_type", current_dict["evidence_type"])
+        evidence_reference = changes.get("evidence_reference", current_dict["evidence_reference"])
+
+        if status == "VERIFICADO":
+            if not evidence_type or evidence_type == "none" or not evidence_reference:
+                raise ControlEvidenceMissingError(
+                    f"El control {control_id} no puede marcarse como VERIFICADO sin evidencia real enlazada."
+                )
+
+        score = 1.0 if status == "VERIFICADO" else (0.5 if status == "IMPLEMENTADO" else 0.0)
+        if "compliance_score" in changes:
+            score = float(changes["compliance_score"])
+
+        now = time.time()
+        new_rev = int(current_dict.get("revision") or 1) + 1
+
+        cur.execute("""
+            UPDATE controls SET
+                framework = ?, clause_or_pillar = ?, name = ?, description = ?,
+                owner_role = ?, status = ?, evidence_type = ?, evidence_reference = ?,
+                verification_date = ?, verification_notes = ?, compliance_score = ?,
+                updated_at = ?, revision = ?
+            WHERE id = ?;
+        """, (
+            framework,
+            str(changes.get("clause_or_pillar", current_dict["clause_or_pillar"])).strip(),
+            str(changes.get("name", current_dict["name"])).strip(),
+            str(changes.get("description", current_dict["description"])).strip(),
+            str(changes.get("owner_role", current_dict["owner_role"])).strip(),
+            status,
+            evidence_type,
+            evidence_reference,
+            str(changes.get("verification_date", current_dict["verification_date"] or "")),
+            str(changes.get("verification_notes", current_dict["verification_notes"] or "")),
+            score,
+            now,
+            new_rev,
+            control_id,
+        ))
+
+        cur.execute("SELECT * FROM controls WHERE id = ?;", (control_id,))
+        return dict(cur.fetchone())
+
+    def insert_control_with_audit_event(
+        self, control: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Da de alta un control y su auditoria en una sola transaccion atomica."""
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_control_cursor(cur, control), audit_event
+        )
+
+    def insert_controls_with_audit_event(
+        self, controls: List[Dict[str, Any]], audit_event: Dict[str, Any]
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        """Inserta lote de controles con auditoria atomica."""
+        def operation(cur: sqlite3.Cursor) -> List[str]:
+            created: List[str] = []
+            for c in controls:
+                self._insert_control_cursor(cur, c)
+                created.append(str(c.get("code") or ""))
+            return created
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def update_control_with_audit_event(
+        self, control_id: str, changes: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Actualiza un control y audita atomicamente."""
+        return self.run_clinical_transaction(
+            lambda cur: self._update_control_cursor(cur, control_id, changes), audit_event
+        )
+
+    def get_control(self, control_id_or_code: str) -> Optional[Dict[str, Any]]:
+        """Recupera un control con sus riesgos vinculados y su historial de evidencias."""
+        def op(cur: sqlite3.Cursor) -> Optional[Dict[str, Any]]:
+            cur.execute("SELECT * FROM controls WHERE id = ? OR code = ?;", (control_id_or_code, control_id_or_code))
+            row = cur.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            cur.execute("""
+                SELECT r.*, rc.effectiveness
+                FROM risks r
+                JOIN risk_controls rc ON r.id = rc.risk_id
+                WHERE rc.control_id = ?;
+            """, (result["id"],))
+            result["risks"] = [dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT * FROM control_evidences WHERE control_id = ? ORDER BY verified_at DESC;", (result["id"],))
+            result["evidences"] = [dict(r) for r in cur.fetchall()]
+            return result
+        return self._run_simple_read(op)
+
+    def list_controls(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Lista controles segun filtros."""
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            query = "SELECT * FROM controls WHERE 1=1"
+            params: List[Any] = []
+            if filters:
+                if filters.get("framework"):
+                    query += " AND framework = ?"
+                    params.append(filters["framework"])
+                if filters.get("status"):
+                    query += " AND status = ?"
+                    params.append(filters["status"])
+                if filters.get("owner_role"):
+                    query += " AND owner_role = ?"
+                    params.append(filters["owner_role"])
+            query += " ORDER BY framework ASC, code ASC;"
+            cur.execute(query, tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
+
+    def get_controls_summary(self) -> Dict[str, Any]:
+        """Calcula metricas de controles y cumplimiento para M8 (Indicadores)."""
+        def op(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            cur.execute("SELECT COUNT(*) FROM controls;")
+            total = cur.fetchone()[0]
+
+            cur.execute("SELECT framework, COUNT(*) FROM controls GROUP BY framework;")
+            by_framework = {k: v for k, v in cur.fetchall()}
+
+            cur.execute("SELECT status, COUNT(*) FROM controls GROUP BY status;")
+            by_status = {k: v for k, v in cur.fetchall()}
+
+            cur.execute("SELECT AVG(compliance_score) FROM controls;")
+            avg_score = cur.fetchone()[0] or 0.0
+
+            return {
+                "total_controls": total,
+                "by_framework": {fw: by_framework.get(fw, 0) for fw in CONTROL_FRAMEWORKS},
+                "by_status": {st: by_status.get(st, 0) for st in CONTROL_STATUSES},
+                "compliance_percentage": round(float(avg_score) * 100.0, 1),
+            }
+        return self._run_simple_read(op)
+
+    def link_risk_control_with_audit_event(
+        self, risk_id: str, control_id: str, effectiveness: str, audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Vincula un riesgo y un control con efectividad declarada en una sola transaccion auditada."""
+        eff = effectiveness.upper().strip()
+        if eff not in CONTROL_EFFECTIVENESS:
+            raise RiskValidationError(f"Efectividad '{eff}' no admitida. Opciones: {', '.join(CONTROL_EFFECTIVENESS)}")
+
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            cur.execute("SELECT id FROM risks WHERE id = ?;", (risk_id,))
+            if not cur.fetchone():
+                raise RiskNotFoundError(f"Riesgo {risk_id} no existe")
+            cur.execute("SELECT id FROM controls WHERE id = ?;", (control_id,))
+            if not cur.fetchone():
+                raise ControlNotFoundError(f"Control {control_id} no existe")
+
+            cur.execute("""
+                INSERT OR REPLACE INTO risk_controls (risk_id, control_id, effectiveness)
+                VALUES (?, ?, ?);
+            """, (risk_id, control_id, eff))
+            return {"risk_id": risk_id, "control_id": control_id, "effectiveness": eff}
+
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def add_control_evidence_with_audit_event(
+        self, evidence: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Registra una evidencia y actualiza el estado del control a VERIFICADO atomicamente."""
+        control_id = str(evidence.get("control_id") or "")
+        evidence_source = str(evidence.get("evidence_source") or "checker_run")
+        reference_id = str(evidence.get("reference_id") or "")
+        observed_result = str(evidence.get("observed_result") or "")
+        verified_by = str(evidence.get("verified_by") or "ROLE_SECURITY_AUDITOR")
+        verified_with_mfa = 1 if evidence.get("verified_with_mfa") else 0
+
+        ev_id = "EVD-" + hashlib.sha256(f"{control_id}-{reference_id}-{time.time()}".encode()).hexdigest()[:8].upper()
+        now = time.time()
+
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            cur.execute("SELECT * FROM controls WHERE id = ?;", (control_id,))
+            control = cur.fetchone()
+            if not control:
+                raise ControlNotFoundError(f"Control {control_id} no existe")
+
+            cur.execute("""
+                INSERT INTO control_evidences (
+                    id, control_id, evidence_source, reference_id, observed_result,
+                    verified_by, verified_at, verified_with_mfa
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                ev_id, control_id, evidence_source, reference_id, observed_result,
+                verified_by, now, verified_with_mfa
+            ))
+
+            cur.execute("""
+                UPDATE controls SET
+                    status = 'VERIFICADO',
+                    evidence_type = ?,
+                    evidence_reference = ?,
+                    verification_date = date('now'),
+                    verification_notes = ?,
+                    compliance_score = 1.0,
+                    updated_at = ?,
+                    revision = revision + 1
+                WHERE id = ?;
+            """, (evidence_source, reference_id, f"Verificado mediante {reference_id}: {observed_result[:100]}", now, control_id))
+
+            cur.execute("SELECT * FROM control_evidences WHERE id = ?;", (ev_id,))
+            return dict(cur.fetchone())
+
+        return self.run_clinical_transaction(operation, audit_event)
 
 
 class DatabaseBackedOrdersDict(collections.abc.MutableMapping):

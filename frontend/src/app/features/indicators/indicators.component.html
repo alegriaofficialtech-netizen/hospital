@@ -1,8 +1,8 @@
 <section class="page">
   <header class="page-header">
     <div>
-      <h1 class="page-title">Indicadores operativos</h1>
-      <p class="page-subtitle">Métricas calculadas a partir de órdenes sintéticas y eventos de auditoría.</p>
+      <h1 class="page-title">Indicadores operativos y de seguridad</h1>
+      <p class="page-subtitle">Métricas del LIS clínico y estado de cumplimiento SGSI-ZTA (Objetivos O2 y O3 de tesis).</p>
     </div>
     <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()">
       <mat-icon>refresh</mat-icon>
@@ -24,6 +24,7 @@
     </div>
   }
 
+  <!-- Métricas Operativas Clínicas -->
   <div class="kpi-grid">
     <mat-card class="kpi-card">
       <mat-icon class="kpi-icon">science</mat-icon>
@@ -62,14 +63,63 @@
     </mat-card>
   </div>
 
+  <!-- Métricas SGSI-ZTA (F3: Gestión de Riesgos M4 y Controles M5) -->
+  @if (isAuditorOrAdmin()) {
+    <div class="section-title">
+      <h2>Indicadores de Seguridad SGSI-ZTA (Tesis Doctoral O2 y O3)</h2>
+    </div>
+
+    <div class="kpi-grid">
+      @if (riskSummary(); as rs) {
+        <mat-card class="kpi-card">
+          <mat-icon class="kpi-icon warning">warning</mat-icon>
+          <span class="kpi-label">Riesgos Identificados (M4)</span>
+          <strong class="kpi-value">{{ rs.total }}</strong>
+          <span class="kpi-hint">
+            {{ (rs.by_inherent_level['CRITICO'] || 0) + (rs.by_inherent_level['ALTO'] || 0) }} inherentes altos/críticos
+          </span>
+        </mat-card>
+
+        <mat-card class="kpi-card">
+          <mat-icon class="kpi-icon success">health_and_safety</mat-icon>
+          <span class="kpi-label">Riesgos Residuales Controlados</span>
+          <strong class="kpi-value">{{ (rs.by_residual_level['BAJO'] || 0) + (rs.by_residual_level['MEDIO'] || 0) }}</strong>
+          <span class="kpi-hint">
+            {{ rs.by_status['CONTROLADO'] || 0 }} bajo tratamiento activo
+          </span>
+        </mat-card>
+      }
+
+      @if (controlSummary(); as cs) {
+        <mat-card class="kpi-card">
+          <mat-icon class="kpi-icon primary">verified_user</mat-icon>
+          <span class="kpi-label">Cumplimiento de Controles (M5)</span>
+          <strong class="kpi-value">{{ cs.compliance_percentage | number:'1.1-1' }}%</strong>
+          <span class="kpi-hint">
+            {{ cs.verified_count }} de {{ cs.total_controls }} formalmente verificados
+          </span>
+        </mat-card>
+
+        <mat-card class="kpi-card">
+          <mat-icon class="kpi-icon">library_books</mat-icon>
+          <span class="kpi-label">Marcos Normativos</span>
+          <strong class="kpi-value">{{ cs.total_controls }}</strong>
+          <span class="kpi-hint">
+            ISO 27001 ({{ cs.by_framework['ISO_27001_2022'] || 0 }}), NIST ({{ cs.by_framework['NIST_SP_800_207'] || 0 }}), CISA ({{ cs.by_framework['CISA_ZTM'] || 0 }})
+          </span>
+        </mat-card>
+      }
+    </div>
+  }
+
   @if (!canViewOrders()) {
     <mat-card class="chart-card">
       <div class="card-heading">
         <div>
           <h2>Indicadores clínicos restringidos</h2>
           <p>
-            El rol de Auditor de Seguridad puede revisar la auditoría encadenada por hash, pero no puede
-            leer órdenes clínicas. Use la Auditoría para la evidencia a nivel de registro.
+            El rol de Auditor de Seguridad puede revisar la auditoría encadenada por hash y los controles SGSI-ZTA, pero no puede
+            leer órdenes clínicas por segregación de funciones.
           </p>
         </div>
       </div>

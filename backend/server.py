@@ -59,6 +59,16 @@ from security_diagnostics import (
     checker_catalog,
     run_checks,
 )
+
+from risk_management import (
+    validate_risk,
+    seed_risk_catalog,
+)
+from control_management import (
+    validate_control,
+    seed_control_catalog,
+)
+
 from clinical_domain import (
     ORDER_ANALYZED,
     ORDER_RELEASED,
@@ -197,6 +207,22 @@ except Exception as e:
     print("[FATAL] No se pudo sembrar el inventario de activos: %s" % e, file=sys.stderr)
     raise
 
+# M4 Riesgos y M5 Controles: siembra automatica, idempotente y auditada (O2 y O3)
+try:
+    RISK_SEED_RESULT = seed_risk_catalog(db_manager)
+    CONTROL_SEED_RESULT = seed_control_catalog(db_manager)
+    print(
+        "[*] Riesgos F11: %d creados, %d existentes | Controles F11: %d creados, %d existentes"
+        % (
+            len(RISK_SEED_RESULT.get("created", [])), len(RISK_SEED_RESULT.get("skipped", [])),
+            len(CONTROL_SEED_RESULT.get("created", [])), len(CONTROL_SEED_RESULT.get("skipped", []))
+        )
+    )
+except Exception as e:
+    print("[FATAL] No se pudo sembrar riesgos y controles F3: %s" % e, file=sys.stderr)
+    raise
+
+
 # Clave del sello de integridad clínico. Override explícito solo para pruebas.
 CLINICAL_SEAL_KEY: Optional[bytes] = None
 
@@ -241,8 +267,8 @@ LOCK = threading.Lock()
 
 # Account requests: public channel without authentication. The request grants
 # no access at all, so it is rate limited per origin to avoid a spam relay.
-IDENTITY_REQUEST_LIMIT = 5
-IDENTITY_REQUEST_WINDOW_SECONDS = 3600
+IDENTITY_REQUEST_LIMIT = int(os.environ.get("IDENTITY_REQUEST_LIMIT", "5"))
+IDENTITY_REQUEST_WINDOW_SECONDS = float(os.environ.get("IDENTITY_REQUEST_WINDOW_SECONDS", "3600"))
 IDENTITY_REQUEST_HITS: Dict[str, List[float]] = {}
 
 
@@ -269,6 +295,9 @@ def record_audit_event(
         )
         LAST_AUDIT_HASH = record["hash"]
         return record
+
+
+
 
 
 def _fields_from_errors(errors: List[str]) -> Dict[str, str]:
@@ -470,6 +499,9 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
     def _do_GET_internal(self) -> None:
         parsed = urlparse(self.path)
         client_ip = self.client_address[0]
+        forwarded = self.headers.get("X-Forwarded-For", "").strip()
+        if client_ip in ("127.0.0.1", "::1") and forwarded:
+            client_ip = forwarded.split(",")[0].strip()
 
         # 1. Endpoint publico de monitoreo y healthcheck
         if parsed.path == "/health":
@@ -605,6 +637,36 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             asset_id = parsed.path[len("/api/v1/assets/"):].strip("/")
             if asset_id:
                 self._handle_asset_get(asset_id, client_ip)
+                return
+
+        # 6. Gestion de Riesgos (M4)
+        if parsed.path == "/api/v1/risks":
+            self._handle_risks_get(parsed.query, client_ip)
+            return
+
+        if parsed.path == "/api/v1/risks/summary":
+            self._handle_risks_summary_get(client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/risks/"):
+            risk_id = parsed.path[len("/api/v1/risks/"):].strip("/")
+            if risk_id:
+                self._handle_risk_get(risk_id, client_ip)
+                return
+
+        # 7. Gestion de Controles (M5)
+        if parsed.path == "/api/v1/controls":
+            self._handle_controls_get(parsed.query, client_ip)
+            return
+
+        if parsed.path == "/api/v1/controls/summary":
+            self._handle_controls_summary_get(client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/controls/"):
+            control_id = parsed.path[len("/api/v1/controls/"):].strip("/")
+            if control_id:
+                self._handle_control_get(control_id, client_ip)
                 return
 
         self.send_json(404, {"error": "NotFound", "message": "Ruta no encontrada"})
@@ -1581,6 +1643,481 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             return
         self.send_json(201, {"evaluation": stored, "environment": F11_ENVIRONMENT})
 
+    # --------------------------------------------------------------------------
+    # Handlers para M4: Gestion de Riesgos (O2)
+    # --------------------------------------------------------------------------
+    def _handle_risks_get(self, query: str, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_RISKS", "LIST_RISKS", client_ip,
+            "Acceso a la matriz de riesgos restringido a Oficial de Seguridad o Administrador",
+            "RISKS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        filters = {}
+        if "category" in params:
+            filters["category"] = params["category"][0]
+        if "status" in params:
+            filters["status"] = params["status"][0]
+        if "inherent_risk_level" in params:
+            filters["inherent_risk_level"] = params["inherent_risk_level"][0]
+        if "residual_risk_level" in params:
+            filters["residual_risk_level"] = params["residual_risk_level"][0]
+        if "asset_id" in params:
+            filters["asset_id"] = params["asset_id"][0]
+
+        risks = db_manager.list_risks(filters)
+        summary = db_manager.get_risks_summary()
+        record_audit_event(
+            "LIST_RISKS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(risks)} riesgos de la matriz", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"risks": risks, "summary": summary, "environment": F11_ENVIRONMENT})
+
+    def _handle_risks_summary_get(self, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_RISKS", "GET_RISKS_SUMMARY", client_ip,
+            "Acceso al resumen de riesgos restringido a roles autorizados",
+            "RISKS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        summary = db_manager.get_risks_summary()
+        record_audit_event(
+            "GET_RISKS_SUMMARY", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de metricas de riesgos: {summary['total_risks']} riesgos",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"summary": summary, "environment": F11_ENVIRONMENT})
+
+    def _handle_risk_get(self, risk_id: str, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_RISKS", "GET_RISK", client_ip,
+            "Acceso al riesgo restringido a roles autorizados",
+            "RISKS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        risk = db_manager.get_risk(risk_id)
+        if not risk:
+            record_audit_event(
+                "GET_RISK", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                f"Riesgo {risk_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {"error": "NotFound", "message": f"Riesgo {risk_id} no encontrado", "code": "RISK_NOT_FOUND"})
+            return
+        record_audit_event(
+            "GET_RISK", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de detalle del riesgo {risk_id}", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"risk": risk, "environment": F11_ENVIRONMENT})
+
+    def _handle_risk_create_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_RISKS", "RISK_CREATE", client_ip,
+            "El alta de riesgos exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "RISK_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de riesgo rechazada: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        errors = validate_risk(payload)
+        if errors:
+            record_audit_event(
+                "RISK_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de riesgo rechazada por datos invalidos: " + ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Datos de riesgo invalidos",
+                "code": "RISK_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+
+        audit_event = {
+            "action": "RISK_CREATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": f"Alta de riesgo {payload.get('code')} ({payload.get('category')})",
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
+        try:
+            risk, _audit_rec = db_manager.insert_risk_with_audit_event(payload, audit_event)
+        except Exception as e:
+            if "Ya existe" in str(e):
+                record_audit_event(
+                    "RISK_CREATE", context.username, str(list(context.roles)), "DENIED_CONFLICT",
+                    f"Riesgo {payload.get('code')} ya existe", client_ip, context.mfa_verified,
+                )
+                self.send_json(409, {"error": "Conflict", "message": str(e), "code": "RISK_ALREADY_EXISTS"})
+                return
+            raise
+        self.send_json(201, {"risk": risk, "environment": F11_ENVIRONMENT})
+
+    def _handle_risk_update_post(self, risk_id: str, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_RISKS", "RISK_UPDATE", client_ip,
+            "La actualizacion de riesgos exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "RISK_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Modificacion de riesgo rechazada: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        errors = validate_risk(payload, partial=True)
+        if errors:
+            record_audit_event(
+                "RISK_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Modificacion de riesgo rechazada por datos invalidos: " + ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Datos de modificacion de riesgo invalidos",
+                "code": "RISK_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+
+        audit_event = {
+            "action": "RISK_UPDATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": f"Actualizacion de riesgo {risk_id}",
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
+        try:
+            risk, _rec = db_manager.update_risk_with_audit_event(risk_id, payload, audit_event)
+        except Exception as e:
+            if "no encontrado" in str(e).lower():
+                record_audit_event(
+                    "RISK_UPDATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                    f"Riesgo {risk_id} no encontrado", client_ip, context.mfa_verified,
+                )
+                self.send_json(404, {"error": "NotFound", "message": str(e), "code": "RISK_NOT_FOUND"})
+                return
+            raise
+        self.send_json(200, {"risk": risk, "environment": F11_ENVIRONMENT})
+
+    def _handle_risk_link_control_post(self, risk_id: str, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_RISKS", "RISK_LINK_CONTROL", client_ip,
+            "Vincular riesgos y controles exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        control_id = str(payload.get("control_id") or "").strip()
+        effectiveness = str(payload.get("effectiveness") or "PREVENTIVO").strip().upper()
+        if not control_id:
+            record_audit_event(
+                "RISK_LINK_CONTROL", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Vinculacion rechazada: control_id es obligatorio", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {"error": "BadRequest", "message": "control_id es obligatorio", "code": "FIELD_REQUIRED"})
+            return
+
+        audit_event = {
+            "action": "RISK_LINK_CONTROL",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": f"Vinculacion de riesgo {risk_id} con control {control_id} ({effectiveness})",
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
+        try:
+            link, _rec = db_manager.link_risk_control_with_audit_event(risk_id, control_id, effectiveness, audit_event)
+        except Exception as e:
+            msg = str(e).lower()
+            if "no existe" in msg:
+                self.send_json(404, {"error": "NotFound", "message": str(e), "code": "RESOURCE_NOT_FOUND"})
+                return
+            if "no admitida" in msg:
+                self.send_json(400, {"error": "BadRequest", "message": str(e), "code": "INVALID_EFFECTIVENESS"})
+                return
+            raise
+        self.send_json(200, {"linked": True, "link": link})
+
+    # --------------------------------------------------------------------------
+    # Handlers para M5: Gestion de Controles (O3)
+    # --------------------------------------------------------------------------
+    def _handle_controls_get(self, query: str, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_CONTROLS", "LIST_CONTROLS", client_ip,
+            "Acceso al catalogo de controles restringido a Oficial de Seguridad o Administrador",
+            "CONTROLS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        filters = {}
+        if "framework" in params:
+            filters["framework"] = params["framework"][0]
+        if "status" in params:
+            filters["status"] = params["status"][0]
+        if "owner_role" in params:
+            filters["owner_role"] = params["owner_role"][0]
+
+        controls = db_manager.list_controls(filters)
+        summary = db_manager.get_controls_summary()
+        record_audit_event(
+            "LIST_CONTROLS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(controls)} controles", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"controls": controls, "summary": summary, "environment": F11_ENVIRONMENT})
+
+    def _handle_controls_summary_get(self, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_CONTROLS", "GET_CONTROLS_SUMMARY", client_ip,
+            "Acceso al resumen de controles restringido a roles autorizados",
+            "CONTROLS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        summary = db_manager.get_controls_summary()
+        record_audit_event(
+            "GET_CONTROLS_SUMMARY", context.username, str(list(context.roles)), "ALLOWED",
+            f"Resumen de controles: {summary['total_controls']} controles, {summary['compliance_percentage']}% cumplimiento",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"summary": summary, "environment": F11_ENVIRONMENT})
+
+    def _handle_control_get(self, control_id: str, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_CONTROLS", "GET_CONTROL", client_ip,
+            "Acceso al control restringido a roles autorizados",
+            "CONTROLS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        control = db_manager.get_control(control_id)
+        if not control:
+            record_audit_event(
+                "GET_CONTROL", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                f"Control {control_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {"error": "NotFound", "message": f"Control {control_id} no encontrado", "code": "CONTROL_NOT_FOUND"})
+            return
+        record_audit_event(
+            "GET_CONTROL", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de detalle de control {control_id}", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"control": control, "environment": F11_ENVIRONMENT})
+
+    def _handle_control_create_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_CONTROLS", "CONTROL_CREATE", client_ip,
+            "El alta de controles exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "CONTROL_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de control rechazada: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        errors = validate_control(payload)
+        if errors:
+            record_audit_event(
+                "CONTROL_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de control rechazada por validacion: " + ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Datos de control invalidos",
+                "code": "CONTROL_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+
+        audit_event = {
+            "action": "CONTROL_CREATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": f"Alta de control {payload.get('code')} ({payload.get('framework')})",
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
+        try:
+            control, _audit_rec = db_manager.insert_control_with_audit_event(payload, audit_event)
+        except Exception as e:
+            if "Ya existe" in str(e):
+                record_audit_event(
+                    "CONTROL_CREATE", context.username, str(list(context.roles)), "DENIED_CONFLICT",
+                    f"Control {payload.get('code')} ya existe", client_ip, context.mfa_verified,
+                )
+                self.send_json(409, {"error": "Conflict", "message": str(e), "code": "CONTROL_ALREADY_EXISTS"})
+                return
+            if "sin evidencia real" in str(e):
+                self.send_json(400, {"error": "BadRequest", "message": str(e), "code": "CONTROL_EVIDENCE_MISSING"})
+                return
+            raise
+        self.send_json(201, {"control": control, "environment": F11_ENVIRONMENT})
+
+    def _handle_control_update_post(self, control_id: str, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_CONTROLS", "CONTROL_UPDATE", client_ip,
+            "La actualizacion de controles exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "CONTROL_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Modificacion de control rechazada: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        errors = validate_control(payload, partial=True)
+        if errors:
+            record_audit_event(
+                "CONTROL_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Modificacion de control rechazada por validacion: " + ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Datos de modificacion de control invalidos",
+                "code": "CONTROL_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+
+        audit_event = {
+            "action": "CONTROL_UPDATE",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": f"Actualizacion de control {control_id}",
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
+        try:
+            control, _rec = db_manager.update_control_with_audit_event(control_id, payload, audit_event)
+        except Exception as e:
+            if "no encontrado" in str(e).lower():
+                record_audit_event(
+                    "CONTROL_UPDATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                    f"Control {control_id} no encontrado", client_ip, context.mfa_verified,
+                )
+                self.send_json(404, {"error": "NotFound", "message": str(e), "code": "CONTROL_NOT_FOUND"})
+                return
+            if "sin evidencia real" in str(e):
+                record_audit_event(
+                    "CONTROL_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                    f"Control {control_id} no puede marcarse VERIFICADO sin evidencia", client_ip, context.mfa_verified,
+                )
+                self.send_json(400, {"error": "BadRequest", "message": str(e), "code": "CONTROL_EVIDENCE_MISSING"})
+                return
+            raise
+        self.send_json(200, {"control": control, "environment": F11_ENVIRONMENT})
+
+    def _handle_control_verify_post(self, control_id: str, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_CONTROLS", "CONTROL_VERIFY", client_ip,
+            "La verificacion formal de controles exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        evidence_source = str(payload.get("evidence_source") or "checker_run").strip()
+        reference_id = str(payload.get("reference_id") or "").strip()
+        observed_result = str(payload.get("observed_result") or "").strip()
+
+        if not reference_id or not observed_result:
+            record_audit_event(
+                "CONTROL_VERIFY", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Verificacion rechazada: reference_id y observed_result son obligatorios", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "reference_id y observed_result son obligatorios para verificar el control",
+                "code": "EVIDENCE_INCOMPLETE",
+            })
+            return
+
+        evidence_payload = {
+            "control_id": control_id,
+            "evidence_source": evidence_source,
+            "reference_id": reference_id,
+            "observed_result": observed_result,
+            "verified_by": context.username,
+            "verified_with_mfa": 1 if context.mfa_verified else 0,
+        }
+        audit_event = {
+            "action": "CONTROL_VERIFY",
+            "actor": context.username,
+            "role": str(list(context.roles)),
+            "status": "ALLOWED",
+            "details": f"Control {control_id} verificado con evidencia {evidence_source}:{reference_id}",
+            "ip": client_ip,
+            "mfa_verified": context.mfa_verified,
+        }
+        try:
+            ev_record, _rec = db_manager.add_control_evidence_with_audit_event(evidence_payload, audit_event)
+        except Exception as e:
+            if "no existe" in str(e).lower():
+                record_audit_event(
+                    "CONTROL_VERIFY", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                    f"Control {control_id} no existe", client_ip, context.mfa_verified,
+                )
+                self.send_json(404, {"error": "NotFound", "message": str(e), "code": "CONTROL_NOT_FOUND"})
+                return
+            raise
+        self.send_json(200, {"verified": True, "evidence": ev_record, "environment": F11_ENVIRONMENT})
+
+
     def do_POST(self) -> None:
         try:
             self._do_POST_internal()
@@ -1682,9 +2219,34 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             "message": "Su solicitud quedo registrada. Un administrador debe autorizarla antes de crear la cuenta.",
         })
 
+    def _handle_admin_rate_limits_reset(self, client_ip: str) -> None:
+        context, failure = self._require_identity_admin("RATE_LIMIT_RESET", client_ip)
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        with LOCK:
+            IDENTITY_REQUEST_HITS.clear()
+        record_audit_event(
+            "RATE_LIMIT_RESET",
+            context.username,
+            str(list(context.roles)),
+            "ALLOWED",
+            "Limpiado el registro de solicitudes de identidad en memoria",
+            client_ip,
+            context.mfa_verified,
+        )
+        self.send_json(200, {
+            "status": "RESET",
+            "message": "Contadores de limite de solicitudes reiniciados exitosamente",
+            "environment": F11_ENVIRONMENT,
+        })
+
     def _do_POST_internal(self) -> None:
         parsed = urlparse(self.path)
         client_ip = self.client_address[0]
+        forwarded = self.headers.get("X-Forwarded-For", "").strip()
+        if client_ip in ("127.0.0.1", "::1") and forwarded:
+            client_ip = forwarded.split(",")[0].strip()
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
 
@@ -1700,6 +2262,10 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         # ejecutar comprobadores ni escribir nada. Las rutas que no son de F2
         # conservan el comportamiento previo.
         f2_payload: Any = payload if body_parsed else INVALID_JSON_BODY
+
+        if parsed.path == "/api/v1/admin/rate-limits/reset":
+            self._handle_admin_rate_limits_reset(client_ip)
+            return
 
         # Account request: recorded in the audit trail and granting no access.
         # Authorization and identity creation belong to the administrator.
@@ -1742,6 +2308,36 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 1:
                 self._handle_asset_update_post(parts[0], f2_payload, client_ip)
+                return
+
+        # 1.d Gestion de Riesgos (M4)
+        if parsed.path == "/api/v1/risks":
+            self._handle_risk_create_post(f2_payload, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/risks/"):
+            remainder = parsed.path[len("/api/v1/risks/"):]
+            parts = [segment for segment in remainder.split("/") if segment]
+            if len(parts) == 2 and parts[1] == "controls":
+                self._handle_risk_link_control_post(parts[0], f2_payload, client_ip)
+                return
+            if len(parts) == 1:
+                self._handle_risk_update_post(parts[0], f2_payload, client_ip)
+                return
+
+        # 1.e Gestion de Controles (M5)
+        if parsed.path == "/api/v1/controls":
+            self._handle_control_create_post(f2_payload, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/controls/"):
+            remainder = parsed.path[len("/api/v1/controls/"):]
+            parts = [segment for segment in remainder.split("/") if segment]
+            if len(parts) == 2 and parts[1] == "verify":
+                self._handle_control_verify_post(parts[0], f2_payload, client_ip)
+                return
+            if len(parts) == 1:
+                self._handle_control_update_post(parts[0], f2_payload, client_ip)
                 return
 
         if parsed.path == "/api/v1/auth/login":
