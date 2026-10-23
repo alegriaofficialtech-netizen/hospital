@@ -63,7 +63,7 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | F1b | M1 pantalla Angular de administracion de identidades, con el patron visual del login | pendiente |
 | F2 | M2 Diagnostico + M3 Inventario: comprobadores reales y catalogo de activos | **cerrada** |
 | F3 | M4 Matriz de riesgos + M5 Controles, derivados de lo que M2 y M3 hayan encontrado | **cerrada** |
-| F4 | M6 Incidentes + M8 Indicadores sobre datos reales de la plataforma | pendiente |
+| F4 | M6 Incidentes + M8 Indicadores sobre datos reales de la plataforma | **cerrada** |
 | F5 | M9 Validacion por expertos y consolidacion de la evidencia por objetivo | pendiente |
 
 ## 5. Matriz de trazabilidad: modulo, objetivo, evidencia
@@ -76,9 +76,9 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | M3 | | x | | | Inventario de los componentes reales con clasificacion, criticidad, responsable, origen, version y marca de sintetico; alta y edicion con MFA, e historial de evaluaciones por activo | real, verificado (F2) |
 | M4 | | x | x | | Riesgos con probabilidad, impacto y severidad calculada, enlazados a activos reales de M3 y a hallazgos reales de M2: `finding_id` apunta al hallazgo y `source_checker` guarda el comprobador de origen. Historial de revisiones y matriz 5x5 | real, verificado (F3) |
 | M5 | | | x | | Estado de cada control con su evidencia enlazada; nunca "cumple" sin evidencia (HTTP 400 `CONTROL_EVIDENCE_MISSING`). Controles alineados a ISO/IEC 27001:2022, NIST SP 800-207 y CISA ZTM | real, verificado (F3) |
-| M6 | | | | x | Incidentes con deteccion, accion, cierre y su registro en auditoria | pendiente |
+| M6 | | | | x | Incidentes con severidad, ciclo de vida validado por maquina de estados, historial inmutable de transiciones, vinculos a activo/riesgo/control y auditoria atomica; alertas derivadas del estado real con evidencia ejecutable y acuse trazable | real, verificado (F4) |
 | M7 | | | x | x | Cadena de hash verificada y su checkpoint | real, verificado |
-| M8 | | | | x | Indicadores con la consulta que los produce. Parcial: ya son reales los del diagnostico y el inventario (reparto por estado, severidad, objetivo, clasificacion y criticidad, cada uno con su campo de origen) | parcial, verificado (F2) |
+| M8 | | | | x | Ocho indicadores calculados sobre datos reales, cada uno con la operacion que lo produce en su campo `source`; ningun valor es una constante y el centinela `undeclared` declara lo que no puede probarse | real, verificado (F4) |
 | M9 | | | | x | Dictamenes de terceros con autor, fecha y alcance; generados por la plataforma: ninguno | pendiente |
 
 ## 6. Lo que ya esta resuelto y sirve de base
@@ -363,3 +363,61 @@ Verificacion con Chrome real sobre la pila desplegada, con capturas en `/home/el
 ### Estado de Cuentas y Privilegios
 
 - `medico.test` conserva privilegios provisionales de administracion con TOTP (`sgsi-admin` + `mfa-required`) hasta la inscripcion formal de MFA para `admin.test`.
+
+## Cierre de F4: M6 Incidentes, alertas e indicadores M8 (2026-10-22)
+
+F4 queda implementada y verificada sobre la rama `feat/f11-f3-risks-controls`, cubriendo el Objetivo O4.
+
+### Que hace F4
+
+**M6 Incidentes de seguridad**:
+- `incidents` con severidad (`BAJA`, `MEDIA`, `ALTA`, `CRITICA`), estado y **maquina de estados validada en el servidor**: una transicion no declarada se rechaza y no muta nada.
+- `incident_updates` es el **historial inmutable** de transiciones: solo recibe `INSERT`, nunca se edita ni se borra, y borra en cascada con su incidente.
+- Vinculos opcionales y reales a activo (M3), riesgo (M4) y control (M5), con integridad referencial.
+- `revision` incrementa en cada transicion; `synthetic` lo impone el servidor en el alta y **se ignora** en la edicion.
+- Endpoints: `GET /api/v1/incidents`, `POST /api/v1/incidents`, `GET /api/v1/incidents/{id|code}`, `POST /api/v1/incidents/{id}`.
+
+**Alertas derivadas**:
+- Las alertas **no son una tabla mutable**: se derivan de forma determinista del estado real en cada consulta y solo se persiste el **acuse** (`alert_acknowledgements`). Una alerta no puede quedar obsoleta ni puede inventarse.
+- Id determinista: `ALR-` + sha1 de `regla|sujeto` (8 hex). Dos consultas seguidas dan los mismos ids.
+- Cada alerta lleva `evidence` con la **operacion real** que la produjo (la sentencia SQL ejecutada y su resultado), igual que el origen de evidencia de M2.
+- Reglas: riesgo residual alto o critico sin control; control implementado sin evidencia de verificacion; hallazgo critico en la ultima ejecucion del diagnostico; incidente abierto mas de 30 dias; identidad administrativa sin MFA (derivada del hallazgo real, no de una suposicion).
+- Endpoints: `GET /api/v1/alerts`, `POST /api/v1/alerts/{id}/ack`.
+
+**M8 Indicadores de seguridad**:
+- `GET /api/v1/indicators` devuelve ocho indicadores calculados sobre datos reales: cobertura de criticidad de activos, riesgos residuales altos, tasa de verificacion de controles, tasa de exito del ultimo diagnostico, cobertura de MFA administrativa, incidentes abiertos, alertas abiertas y estado de la cadena de auditoria.
+- Cada indicador declara `source`: la consulta u operacion real que lo produce. Si no puede declararse, el centinela es `undeclared` y la interfaz lo muestra como limitacion, nunca como un cero.
+
+### Permisos (minimo privilegio)
+
+| Ruta | Accion | Roles | MFA |
+|---|---|---|---|
+| `GET /api/v1/incidents`, `GET /api/v1/incidents/{id}` | `VIEW_INCIDENTS` | auditor, admin | no |
+| `POST /api/v1/incidents`, `POST /api/v1/incidents/{id}` | `MANAGE_INCIDENTS` | admin | **si** (humano) |
+| `GET /api/v1/alerts` | `VIEW_ALERTS` | auditor, admin | no |
+| `POST /api/v1/alerts/{id}/ack` | `ACK_ALERTS` | admin | **si** (humano) |
+| `GET /api/v1/indicators` | `VIEW_INDICATORS` | todos los autenticados | no |
+
+`MANAGE_INCIDENTS` y `ACK_ALERTS` estan en `HUMAN_ONLY_ACTIONS`: una cuenta de servicio nunca gestiona incidentes ni acusa alertas, aunque tenga el rol.
+
+### Verificacion
+
+- **127/127 pruebas de API aprobadas** (89 previas + 38 de F4: 22 de dominio sobre base temporal y 16 contra la pila real).
+- **Migracion 8 aplicada**: `incidents`, `incident_updates` y `alert_acknowledgements`, aditivas e idempotentes, sin `ALTER` sobre tablas existentes.
+- **Dominio en base temporal**: siembra de 2 incidentes sinteticos, idempotencia de la siembra, fail-closed ante un vinculo declarado inexistente, alta forzando `synthetic`, transiciones validas e invalidas, ids de alerta deterministas, evidencia no vacia, una prueba por regla (aparicion y desaparicion del sujeto) y **rollback total si falla la auditoria** (alta y transicion).
+- **API contra la pila real**: RBAC de los cinco roles, denegacion por falta de MFA, conflicto de codigo duplicado, transicion invalida con 409 y estado intacto, historial coherente con el estado real, 404 de incidente y de alerta, `synthetic` inmutable y acuse de una alerta real derivada.
+- **Verificacion en navegador real** (capturas `shots-f4`, series 30 a 37), **24 de 24 comprobaciones en verde**: lista de incidentes con severidad, estado y marca `SINT`; detalle con historial de transiciones y accion de transicion; alertas con id determinista, regla visible y **evidencia literal** (320 caracteres de la operacion real); indicadores con su origen; panel con la seccion de monitorizacion; y el auditor leyendo sin poder crear, transicionar ni acusar.
+
+### Correcciones de arnes de pruebas en F4
+
+- `test_f11_admin.py` y `test_f11_identity_request.py` seguian acreditando MFA por el claim `acr`, que el backend **no** acepta. Un arnes mas laxo que el servidor esconde denegaciones reales: se alinearon con el criterio del backend (`amr` como lista con `otp`, `totp` o `mfa-otp`). Era la causa del 403 intermitente en `test_01`.
+- `test_30` de F3 borraba solo la version 7 de `schema_migrations`; como el marco decide por `MAX(version)`, con la 8 presente la 7 no se reejecutaba nunca. Ahora retira las versiones `>= 7`.
+- `test_23` de F4 asumia que todo historial empieza en `ABIERTO`; los incidentes sembrados arrancan en estados distintos. Ahora comprueba la invariante real: la ultima transicion coincide con el estado que devuelve la API.
+
+### Limitaciones de F4
+
+- **Las pruebas de API dejan incidentes sinteticos en la base viva** (codigos `INC-SINT-API-*`, `INC-TR-API-*`). Es la misma pauta que las fases anteriores con riesgos y controles: el laboratorio es sintetico y todos los registros van marcados, pero un despliegue de demostracion conviene re-sembrar la base.
+- `IND_OPEN_ALERTS` no es SQL puro: usa `derive_alerts()` en proceso y su `source` describe las fuentes en vez de ser una sentencia ejecutable. Se declara asi de forma explicita.
+- Los acuses sobreviven aunque la regla deje de aplicar; es intencional (trazabilidad de la respuesta), pero no hay purga.
+- `dashboard.component.spec.ts` (prueba unitaria de Angular) no se actualizo: el panel ahora dispara tres consultas mas y el spec no las espera. No es ejecutable en `servidor-1` (no hay Node) y no forma parte de la suite de API.
+- El interceptor de modo demo no tiene manejadores para las tres rutas nuevas; en `local-real`, que es el modo desplegado, no aplica.

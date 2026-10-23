@@ -1,0 +1,509 @@
+<section class="incidents-page" aria-label="Incidentes de seguridad">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>report_problem</mat-icon>
+        <span>Módulo M6 · Monitorización de seguridad</span>
+      </div>
+      <h1>Incidentes de seguridad</h1>
+      <p class="subtitle">
+        Seguimiento operativo de incidentes reales de la plataforma: severidad, ciclo de vida,
+        vínculos con activos y riesgos, e historial inmutable de transiciones.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (canManage()) {
+        <button mat-flat-button color="primary" (click)="openCreateForm()">
+          <mat-icon>add</mat-icon>
+          Nuevo incidente
+        </button>
+      }
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- Resumen -->
+  <div class="kpi-grid">
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="primary">list_alt</mat-icon>
+        <mat-card-title>Incidentes</mat-card-title>
+        <mat-card-subtitle>Registros devueltos por la API</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ totalCount() }}</div>
+        <div class="kpi-sub">Con los filtros aplicados</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card kpi-warning">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>pending_actions</mat-icon>
+        <mat-card-title>Abiertos</mat-card-title>
+        <mat-card-subtitle>ABIERTO o EN_INVESTIGACION</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ openCount() }}</div>
+        <div class="kpi-sub">Requieren seguimiento operativo</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card kpi-danger">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>error</mat-icon>
+        <mat-card-title>Severidad crítica</mat-card-title>
+        <mat-card-subtitle>Incidentes con severidad CRITICA</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ criticalCount() }}</div>
+        <div class="kpi-sub">Prioridad de respuesta</div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+
+  <!-- Filtros admitidos por la API -->
+  <mat-card class="filters-card">
+    <mat-card-content class="filters-content">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Estado</mat-label>
+        <mat-select
+          [value]="filterStatus()"
+          (selectionChange)="filterStatus.set($event.value); loadData()"
+        >
+          <mat-option [value]="null">Todos</mat-option>
+          @for (st of statuses; track st) {
+            <mat-option [value]="st">{{ st }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Severidad</mat-label>
+        <mat-select
+          [value]="filterSeverity()"
+          (selectionChange)="filterSeverity.set($event.value); loadData()"
+        >
+          <mat-option [value]="null">Todas</mat-option>
+          @for (sev of severities; track sev) {
+            <mat-option [value]="sev">{{ sev }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Tabla de incidentes -->
+  <mat-card class="table-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar color="primary">table_chart</mat-icon>
+      <mat-card-title>Incidentes registrados</mat-card-title>
+      <mat-card-subtitle>{{ incidents().length }} registros recuperados de la API</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content class="table-content">
+      @if (loading()) {
+        <div class="loading-shade">
+          <mat-progress-spinner mode="indeterminate" diameter="48"></mat-progress-spinner>
+          <span>Consultando API de incidentes...</span>
+        </div>
+      }
+
+      <div class="table-responsive">
+        <table mat-table [dataSource]="incidents()" class="mat-elevation-z0">
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef>Código</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="code-badge">{{ r.code }}</span>
+              @if (r.synthetic) {
+                <span class="synthetic-tag" title="Incidente sintético de laboratorio">SINT</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="title">
+            <th mat-header-cell *matHeaderCellDef>Título</th>
+            <td mat-cell *matCellDef="let r">
+              <div class="incident-title">{{ r.title }}</div>
+              <div class="incident-owner">Responsable: {{ r.owner_role || 'sin rol declarado' }}</div>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="severity">
+            <th mat-header-cell *matHeaderCellDef>Severidad</th>
+            <td mat-cell *matCellDef="let r">
+              <span [class]="'sev-chip ' + severityClass(r.severity)">{{ r.severity }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
+            <td mat-cell *matCellDef="let r">
+              <span [class]="'status-chip ' + statusClass(r.status)">{{ r.status }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="detected_at">
+            <th mat-header-cell *matHeaderCellDef>Detección</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="date-cell">{{ toDate(r.detected_at) | date: 'short' }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="links">
+            <th mat-header-cell *matHeaderCellDef>Vínculos</th>
+            <td mat-cell *matCellDef="let r">
+              <div class="link-line">
+                <mat-icon class="mini-icon">dns</mat-icon>
+                <span>{{ assetLabel(r) }}</span>
+              </div>
+              <div class="link-line">
+                <mat-icon class="mini-icon">warning</mat-icon>
+                <span>{{ riskLabel(r) }}</span>
+              </div>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let r">
+              <button mat-icon-button color="primary" (click)="selectIncident(r)" title="Ver detalle e historial">
+                <mat-icon>visibility</mat-icon>
+              </button>
+              @if (canTransition(r)) {
+                <button mat-icon-button (click)="openTransitionDialog(r)" title="Transicionar estado">
+                  <mat-icon>swap_horiz</mat-icon>
+                </button>
+              }
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr
+            mat-row
+            *matRowDef="let row; columns: displayedColumns"
+            [class.selected-row]="selectedIncident()?.id === row.id"
+          ></tr>
+        </table>
+      </div>
+
+      @if (!loading() && incidents().length === 0) {
+        <p class="empty-state">
+          La API no devolvió incidentes con los filtros aplicados.
+        </p>
+      }
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Detalle con historial de transiciones -->
+  @if (selectedIncident(); as incident) {
+    <div class="detail-section">
+      <mat-card class="detail-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">report_problem</mat-icon>
+          <div class="header-content">
+            <mat-card-title>Incidente {{ incident.code }}</mat-card-title>
+            <mat-card-subtitle>
+              {{ incident.title }} · Revisión {{ incident.revision }}
+            </mat-card-subtitle>
+          </div>
+          @if (canTransition(incident)) {
+            <button mat-stroked-button color="primary" (click)="openTransitionDialog(incident)">
+              <mat-icon>swap_horiz</mat-icon>
+              Transicionar estado
+            </button>
+          }
+          <button mat-icon-button (click)="clearSelection()" class="close-btn" title="Cerrar detalle">
+            <mat-icon>close</mat-icon>
+          </button>
+        </mat-card-header>
+
+        <mat-card-content>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Descripción</span>
+              <p class="detail-desc">{{ incident.description || 'Sin descripción registrada.' }}</p>
+            </div>
+
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Severidad</span>
+                <span [class]="'sev-chip ' + severityClass(incident.severity)">{{ incident.severity }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Estado actual</span>
+                <span [class]="'status-chip ' + statusClass(incident.status)">{{ incident.status }}</span>
+              </div>
+            </div>
+
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Detección</span>
+                <span class="detail-val">{{ toDate(incident.detected_at) | date: 'short' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Cierre</span>
+                <span class="detail-val">{{ closedAtLabel(incident) }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Rol responsable</span>
+                <span class="detail-val">{{ incident.owner_role || 'sin rol declarado' }}</span>
+              </div>
+            </div>
+
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Activo M3 vinculado</span>
+                <span class="detail-val"><code>{{ assetLabel(incident) }}</code></span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Riesgo M4 vinculado</span>
+                <span class="detail-val"><code>{{ riskLabel(incident) }}</code></span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Control M5 vinculado</span>
+                <span class="detail-val"><code>{{ incident.control_id || 'Sin control' }}</code></span>
+              </div>
+            </div>
+
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Registrado por</span>
+                <span class="detail-val">{{ incident.created_by || 'SYSTEM' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Identificador interno</span>
+                <span class="detail-val"><code>{{ incident.id }}</code></span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Origen</span>
+                <span class="detail-val">
+                  {{ incident.synthetic ? 'Incidente sintético de laboratorio' : 'Incidente declarado' }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Historial inmutable de transiciones -->
+          <div class="history-block">
+            <h3>
+              <mat-icon>history</mat-icon>
+              Historial de transiciones ({{ updates().length }})
+            </h3>
+
+            @if (loadingDetail()) {
+              <div class="mini-loading">
+                <mat-progress-spinner mode="indeterminate" diameter="24"></mat-progress-spinner>
+                <span>Cargando historial...</span>
+              </div>
+            } @else if (updates().length === 0) {
+              <p class="empty-sub">La API no devolvió transiciones para este incidente.</p>
+            } @else {
+              <ol class="history-list">
+                @for (update of updates(); track update.id) {
+                  <li class="history-item">
+                    <div class="history-head">
+                      <span class="history-transition">
+                        {{ update.from_status || 'ALTA' }}
+                        <mat-icon class="mini-icon">arrow_forward</mat-icon>
+                        {{ update.to_status }}
+                      </span>
+                      <span class="history-date">{{ toDate(update.occurred_at) | date: 'medium' }}</span>
+                    </div>
+                    <div class="history-meta">
+                      <mat-icon class="mini-icon">person</mat-icon>
+                      <span>{{ update.actor }}</span>
+                      <span class="history-id"><code>{{ update.id }}</code></span>
+                    </div>
+                    <p class="history-note">{{ update.note || 'Sin nota registrada.' }}</p>
+                  </li>
+                }
+              </ol>
+            }
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Alta de incidente -->
+  @if (showForm()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">add_alert</mat-icon>
+          <mat-card-title>Registrar nuevo incidente</mat-card-title>
+          <mat-card-subtitle>
+            Requiere rol administrador de plataforma y segundo factor (MFA) acreditado
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (formError()) {
+            <div class="error-banner" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ formError() }}</span>
+            </div>
+          }
+
+          @if (catalogsError()) {
+            <div class="info-banner">
+              <mat-icon>info_outline</mat-icon>
+              <span>{{ catalogsError() }}</span>
+            </div>
+          }
+
+          <div class="form-grid">
+            <mat-form-field appearance="outline">
+              <mat-label>Código del incidente</mat-label>
+              <input matInput [(ngModel)]="formCode" placeholder="Ej: INC-F11-IAM-03" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Severidad</mat-label>
+              <mat-select [(ngModel)]="formSeverity">
+                @for (sev of severities; track sev) {
+                  <mat-option [value]="sev">{{ sev }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Título</mat-label>
+              <input matInput [(ngModel)]="formTitle" placeholder="Resumen operativo del incidente" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Descripción</mat-label>
+              <textarea matInput [(ngModel)]="formDescription" rows="3"></textarea>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Activo M3 (opcional)</mat-label>
+              <mat-select [(ngModel)]="formAssetId">
+                <mat-option [value]="null">Sin activo vinculado</mat-option>
+                @for (asset of assets(); track asset.id) {
+                  <mat-option [value]="asset.id">{{ asset.name }} ({{ asset.criticality }})</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Riesgo M4 (opcional)</mat-label>
+              <mat-select [(ngModel)]="formRiskId">
+                <mat-option [value]="null">Sin riesgo vinculado</mat-option>
+                @for (risk of risks(); track risk.id) {
+                  <mat-option [value]="risk.id">{{ risk.code }} · {{ risk.name }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Rol responsable</mat-label>
+              <input matInput [(ngModel)]="formOwnerRole" placeholder="Ej: ROLE_SECURITY_AUDITOR">
+            </mat-form-field>
+          </div>
+
+          <p class="form-note">
+            El estado inicial (ABIERTO) y la marca de incidente sintético los impone el servidor:
+            el navegador no los declara.
+          </p>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelForm()" [disabled]="saving()">Cancelar</button>
+          <button mat-flat-button color="primary" (click)="saveIncident()" [disabled]="saving()">
+            @if (saving()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Registrar incidente
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Transición de estado -->
+  @if (showTransition()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        @if (transitionTarget; as target) {
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">swap_horiz</mat-icon>
+          <mat-card-title>Transicionar {{ target.code }}</mat-card-title>
+          <mat-card-subtitle>
+            Estado actual: {{ target.status }} · solo se ofrecen transiciones válidas del backend
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (transitionError()) {
+            <div class="error-banner" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ transitionError() }}</span>
+            </div>
+          }
+
+          @if (allowedTransitions(target).length === 0) {
+            <p class="empty-sub">
+              {{ target.status }} es un estado terminal: no admite más transiciones. Si el incidente
+              reaparece debe registrarse uno nuevo.
+            </p>
+          } @else {
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Estado destino</mat-label>
+              <mat-select [(ngModel)]="transitionTo">
+                @for (next of allowedTransitions(target); track next) {
+                  <mat-option [value]="next">{{ next }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Nota de la transición (obligatoria)</mat-label>
+              <textarea
+                matInput
+                [(ngModel)]="transitionNote"
+                rows="3"
+                placeholder="Motivo y evidencia de la transición"
+              ></textarea>
+            </mat-form-field>
+          }
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelTransitionDialog()" [disabled]="transitioning()">
+            Cancelar
+          </button>
+          <button
+            mat-flat-button
+            color="accent"
+            (click)="confirmTransition()"
+            [disabled]="transitioning() || !transitionTo || !transitionNote.trim()"
+          >
+            @if (transitioning()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Confirmar transición
+          </button>
+        </mat-card-actions>
+        }
+      </mat-card>
+    </div>
+  }
+</section>

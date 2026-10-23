@@ -79,6 +79,61 @@
     </mat-card>
   </div>
 
+  <!-- Monitorización de seguridad (F4): solo si el rol puede leerla -->
+  @if (canViewMonitoring()) {
+    <div class="card-heading">
+      <div>
+        <h2>Monitorización de seguridad</h2>
+        <p>
+          Incidentes, alertas derivadas e indicadores M8 calculados sobre el estado real de la
+          plataforma.
+        </p>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      @if (canViewIncidents()) {
+        <mat-card class="kpi-card" [routerLink]="['/incidentes']" style="cursor: pointer">
+          <mat-icon class="kpi-icon warning">report_problem</mat-icon>
+          <span class="kpi-label">Incidentes abiertos</span>
+          <strong class="kpi-value">{{ openIncidents() ?? '—' }}</strong>
+          <span class="kpi-hint">ABIERTO o EN_INVESTIGACION · Ver incidentes</span>
+        </mat-card>
+      }
+
+      @if (canViewAlerts()) {
+        <mat-card class="kpi-card" [routerLink]="['/alertas']" style="cursor: pointer">
+          <mat-icon class="kpi-icon warning">notifications_active</mat-icon>
+          <span class="kpi-label">Alertas sin acusar</span>
+          <strong class="kpi-value">{{ unacknowledgedAlerts() ?? '—' }}</strong>
+          <span class="kpi-hint">Derivadas del estado actual · Ver alertas</span>
+        </mat-card>
+      }
+
+      @if (canViewIndicators()) {
+        <mat-card class="kpi-card" [routerLink]="['/indicadores']" style="cursor: pointer">
+          <mat-icon class="kpi-icon">monitoring</mat-icon>
+          <span class="kpi-label">Indicadores con peor estado</span>
+          @if (worstIndicators().length) {
+            @for (ind of worstIndicators(); track ind.code) {
+              <div
+                style="display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem"
+              >
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                  {{ ind.name }}
+                </span>
+                <strong [style.color]="indicatorStatusColor(ind)">{{ indicatorValue(ind) }}</strong>
+              </div>
+            }
+          } @else {
+            <strong class="kpi-value">—</strong>
+          }
+          <span class="kpi-hint">Ver panel de indicadores</span>
+        </mat-card>
+      }
+    </div>
+  }
+
   <mat-card class="table-card">
     <div class="card-heading">
       <div>

@@ -29,6 +29,7 @@ const NAV_ITEMS: readonly NavItem[] = [
       'ROLE_LAB_TECH',
       'ROLE_PATHOLOGIST',
       'ROLE_SECURITY_AUDITOR',
+      'ROLE_PLATFORM_ADMIN',
     ],
   },
   { label: 'Admisión', icon: 'assignment_ind', route: '/admision', roles: ['ROLE_RECEPTION'] },
@@ -59,6 +60,7 @@ const NAV_ITEMS: readonly NavItem[] = [
       'ROLE_LAB_TECH',
       'ROLE_PATHOLOGIST',
       'ROLE_SECURITY_AUDITOR',
+      'ROLE_PLATFORM_ADMIN',
     ],
   },
   {
@@ -89,6 +91,18 @@ const NAV_ITEMS: readonly NavItem[] = [
     label: 'Controles (M5)',
     icon: 'verified',
     route: '/controles',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Incidentes (M6)',
+    icon: 'report_problem',
+    route: '/incidentes',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Alertas',
+    icon: 'notifications_active',
+    route: '/alertas',
     roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
   },
 ];

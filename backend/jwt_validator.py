@@ -132,7 +132,7 @@ CLINICAL_ACTIONS = frozenset({"CREATE_ORDER", "VALIDATE_ORDER", "VIEW_ORDERS"})
 
 # Acciones que solo puede ejecutar una persona con MFA acreditada. Una cuenta
 # de servicio queda excluida igual que en las acciones clinicas.
-HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS", "MANAGE_RISKS", "MANAGE_CONTROLS"})
+HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS", "MANAGE_RISKS", "MANAGE_CONTROLS", "MANAGE_INCIDENTS", "ACK_ALERTS"})
 
 CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "CREATE_ORDER": {
@@ -206,6 +206,58 @@ CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
         "required_roles": {"ROLE_PLATFORM_ADMIN"},
         "require_mfa": True,
         "description": "Alta, modificacion, verificacion con evidencia y vinculacion de controles (M5)",
+    },
+
+    "VIEW_INCIDENTS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": (
+            "Consulta de incidentes y su historial de transiciones (M6). Minimo "
+            "privilegio: solo el Oficial de Seguridad y el Administrador de "
+            "plataforma ven el seguimiento operativo de incidentes."
+        ),
+    },
+    "MANAGE_INCIDENTS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": (
+            "Alta y transicion de estado de incidentes (M6). Minimo privilegio: "
+            "solo el Administrador de plataforma, con MFA acreditada, y en "
+            "HUMAN_ONLY_ACTIONS: una cuenta de servicio nunca gestiona incidentes."
+        ),
+    },
+    "VIEW_ALERTS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": (
+            "Consulta de alertas derivadas del estado real (M6). Minimo "
+            "privilegio: el Oficial de Seguridad y el Administrador; las alertas "
+            "describen riesgos y hallazgos que el resto de roles no debe ver."
+        ),
+    },
+    "ACK_ALERTS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": (
+            "Acuse de alertas derivadas (M6). Minimo privilegio: solo el "
+            "Administrador de plataforma, con MFA acreditada, y en "
+            "HUMAN_ONLY_ACTIONS: el acuse asume la responsabilidad de respuesta."
+        ),
+    },
+    "VIEW_INDICATORS": {
+        "required_roles": {
+            "ROLE_RECEPTION",
+            "ROLE_LAB_TECH",
+            "ROLE_PATHOLOGIST",
+            "ROLE_SECURITY_AUDITOR",
+            "ROLE_PLATFORM_ADMIN",
+        },
+        "require_mfa": False,
+        "description": (
+            "Consulta del panel de indicadores M8. Es el panel de lectura: lo ve "
+            "cualquier identidad autenticada; no expone datos clinicos ni permite "
+            "escritura, por lo que no exige MFA ni rol de gestion."
+        ),
     },
 
 }

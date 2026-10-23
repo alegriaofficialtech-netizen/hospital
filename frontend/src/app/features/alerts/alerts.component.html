@@ -1,0 +1,238 @@
+<section class="alerts-page" aria-label="Alertas derivadas del estado real">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>notifications_active</mat-icon>
+        <span>Módulo M6 · Alertas derivadas</span>
+      </div>
+      <h1>Alertas de seguridad</h1>
+      <p class="subtitle">
+        Alertas derivadas en cada consulta del estado real de riesgos, controles, hallazgos,
+        incidentes e identidades. Solo el acuse se persiste; la evidencia es la operación que
+        produjo cada alerta.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- Resumen -->
+  <div class="kpi-grid">
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="primary">notifications</mat-icon>
+        <mat-card-title>Alertas derivadas</mat-card-title>
+        <mat-card-subtitle>Calculadas del estado actual</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ totalCount() }}</div>
+        <div class="kpi-sub">No se persisten: se derivan en cada consulta</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card kpi-warning">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>mark_email_unread</mat-icon>
+        <mat-card-title>Sin acuse</mat-card-title>
+        <mat-card-subtitle>Pendientes de respuesta</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ pendingCount() }}</div>
+        <div class="kpi-sub">Requieren revisión del administrador</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card kpi-danger">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>priority_high</mat-icon>
+        <mat-card-title>Severidad crítica</mat-card-title>
+        <mat-card-subtitle>Alertas con severidad CRITICA</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ criticalCount() }}</div>
+        <div class="kpi-sub">Prioridad máxima de respuesta</div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+
+  @if (loading()) {
+    <div class="loading-shade">
+      <mat-progress-spinner mode="indeterminate" diameter="44"></mat-progress-spinner>
+      <span>Derivando alertas del estado real...</span>
+    </div>
+  } @else if (alerts().length === 0) {
+    <mat-card class="empty-card">
+      <mat-icon>notifications_off</mat-icon>
+      <h2>Sin alertas derivadas del estado actual</h2>
+      <p>
+        La API no derivó ninguna alerta de las reglas activas: no hay riesgos residuales altos sin
+        control, controles pendientes de verificación, hallazgos críticos abiertos, incidentes
+        abiertos demasiado tiempo ni identidades administrativas sin MFA acreditada. Esta lista
+        vacía es un resultado real, no un fallo de carga.
+      </p>
+    </mat-card>
+  } @else {
+    <div class="alerts-list">
+      @for (alert of alerts(); track alert.id) {
+        <mat-card class="alert-card" [class.is-acknowledged]="alert.acknowledged">
+          <mat-card-header>
+            <mat-icon mat-card-avatar>notification_important</mat-icon>
+            <div class="header-content">
+              <mat-card-title>{{ alert.title }}</mat-card-title>
+              <mat-card-subtitle>
+                Regla {{ alert.rule }} · Sujeto {{ alert.subject }}
+              </mat-card-subtitle>
+            </div>
+            <div class="chip-row">
+              <span [class]="'sev-chip ' + severityClass(alert.severity)">{{ alert.severity }}</span>
+              @if (alert.acknowledged) {
+                <span class="ack-chip acknowledged">
+                  <mat-icon class="mini-icon">task_alt</mat-icon>
+                  Acusada
+                </span>
+              } @else {
+                <span class="ack-chip pending">
+                  <mat-icon class="mini-icon">schedule</mat-icon>
+                  Pendiente de acuse
+                </span>
+              }
+            </div>
+          </mat-card-header>
+
+          <mat-card-content>
+            <div class="alert-meta">
+              <div class="meta-item">
+                <span class="meta-label">Regla</span>
+                <code>{{ alert.rule }}</code>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Sujeto</span>
+                <code>{{ alert.subject }}</code>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Detectada</span>
+                <span class="meta-value">{{ toDate(alert.detected_at) | date: 'medium' }}</span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Id determinista</span>
+                <code class="alert-id">{{ alert.id }}</code>
+              </div>
+            </div>
+
+            @if (alert.acknowledged) {
+              <div class="ack-info">
+                <mat-icon class="mini-icon">verified_user</mat-icon>
+                <span>
+                  Acusada por <strong>{{ alert.acknowledged_by }}</strong>
+                  el {{ toDate(alert.acknowledged_at) | date: 'medium' }}
+                </span>
+              </div>
+            } @else if (canAck()) {
+              <div class="ack-action">
+                <button mat-stroked-button color="primary" (click)="openAck(alert)">
+                  <mat-icon>done_all</mat-icon>
+                  Acusar alerta
+                </button>
+              </div>
+            }
+
+            <!-- Evidencia: texto literal de la API, sin reformatear -->
+            <div class="evidence-block">
+              <button
+                mat-button
+                type="button"
+                class="evidence-toggle"
+                (click)="toggleEvidence(alert.id)"
+                [attr.aria-expanded]="isExpanded(alert.id)"
+              >
+                <mat-icon>{{ isExpanded(alert.id) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                {{ isExpanded(alert.id) ? 'Ocultar evidencia' : 'Ver evidencia' }}
+              </button>
+
+              @if (isExpanded(alert.id)) {
+                <div class="evidence-body">
+                  <p class="evidence-caption">
+                    Operación real que produjo la alerta (consulta ejecutada y su resultado),
+                    devuelta por la API tal cual:
+                  </p>
+                  <pre class="evidence-text">{{ alert.evidence }}</pre>
+                </div>
+              }
+            </div>
+          </mat-card-content>
+        </mat-card>
+      }
+    </div>
+  }
+
+  <!-- Acuse de alerta -->
+  @if (showAck()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        @if (ackTarget; as target) {
+          <mat-card-header>
+            <mat-icon mat-card-avatar color="primary">done_all</mat-icon>
+            <mat-card-title>Acusar alerta {{ target.id }}</mat-card-title>
+            <mat-card-subtitle>
+              {{ target.title }} · regla {{ target.rule }}
+            </mat-card-subtitle>
+          </mat-card-header>
+
+          <mat-card-content class="form-content">
+            @if (ackError()) {
+              <div class="error-banner" role="alert">
+                <mat-icon>error_outline</mat-icon>
+                <span>{{ ackError() }}</span>
+              </div>
+            }
+
+            <p class="form-note">
+              El acuse asume la responsabilidad de respuesta y queda auditado. La alerta seguirá
+              visible como acusada mientras su causa persista en el estado real.
+            </p>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Nota del acuse (obligatoria)</mat-label>
+              <textarea
+                matInput
+                [(ngModel)]="ackNote"
+                rows="3"
+                placeholder="Acción tomada o justificación de la respuesta"
+              ></textarea>
+            </mat-form-field>
+          </mat-card-content>
+
+          <mat-card-actions align="end">
+            <button mat-button (click)="cancelAck()" [disabled]="acking()">Cancelar</button>
+            <button
+              mat-flat-button
+              color="primary"
+              (click)="confirmAck()"
+              [disabled]="acking() || !ackNote.trim()"
+            >
+              @if (acking()) {
+                <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+              } @else {
+                <mat-icon>check</mat-icon>
+              }
+              Confirmar acuse
+            </button>
+          </mat-card-actions>
+        }
+      </mat-card>
+    </div>
+  }
+</section>

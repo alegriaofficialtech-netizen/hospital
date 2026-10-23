@@ -39,12 +39,17 @@ from database import (
     AssetAlreadyExistsError,
     AssetNotFoundError,
     AssetValidationError,
+    AlertNotFoundError,
     ClinicalDatabaseManager,
     DatabaseBackedAuditLogs,
     DatabaseBackedOrdersDict,
     DatabaseError,
     DuplicateOrderError,
     F11_ENVIRONMENT,
+    IncidentAlreadyExistsError,
+    IncidentNotFoundError,
+    IncidentTransitionError,
+    IncidentValidationError,
     IomtReplayError,
     OrderVersionConflictError,
 )
@@ -67,6 +72,21 @@ from risk_management import (
 from control_management import (
     validate_control,
     seed_control_catalog,
+)
+
+from incident_management import (
+    create_incident,
+    get_incident,
+    list_incident_updates,
+    list_incidents,
+    seed_incidents,
+    transition_incident,
+    validate_incident,
+)
+from alert_management import (
+    acknowledge_alert,
+    list_alerts,
+    list_indicators,
 )
 
 from clinical_domain import (
@@ -220,6 +240,23 @@ try:
     )
 except Exception as e:
     print("[FATAL] No se pudo sembrar riesgos y controles F3: %s" % e, file=sys.stderr)
+    raise
+
+# M6 Monitorizacion: 2 incidentes de laboratorio sinteticos se siembran de
+# forma idempotente y auditada sobre los activos (M3) y riesgos (M4) reales.
+# La siembra falla cerrada: un vinculo declarado que no exista aborta el
+# arranque en lugar de dejar la trazabilidad de incidentes incompleta.
+try:
+    INCIDENT_SEED_RESULT = seed_incidents(db_manager)
+    print(
+        "[*] Incidentes F11: %d creados, %d existentes"
+        % (
+            len(INCIDENT_SEED_RESULT.get("created", [])),
+            len(INCIDENT_SEED_RESULT.get("skipped", [])),
+        )
+    )
+except Exception as e:
+    print("[FATAL] No se pudieron sembrar los incidentes de laboratorio F4: %s" % e, file=sys.stderr)
     raise
 
 
@@ -668,6 +705,28 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             if control_id:
                 self._handle_control_get(control_id, client_ip)
                 return
+
+        # 8. Monitorizacion de incidentes (M6 / F4). La ruta de detalle incluye
+        #    el historial de transiciones y se resuelve DESPUES de la coleccion.
+        if parsed.path == "/api/v1/incidents":
+            self._handle_incidents_get(parsed.query, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/incidents/"):
+            incident_id = parsed.path[len("/api/v1/incidents/"):].strip("/")
+            if incident_id:
+                self._handle_incident_get(incident_id, client_ip)
+                return
+
+        # 9. Alertas derivadas del estado real (M6 / F4)
+        if parsed.path == "/api/v1/alerts":
+            self._handle_alerts_get(client_ip)
+            return
+
+        # 10. Indicadores M8: panel de lectura con el origen real de cada uno
+        if parsed.path == "/api/v1/indicators":
+            self._handle_indicators_get(client_ip)
+            return
 
         self.send_json(404, {"error": "NotFound", "message": "Ruta no encontrada"})
 
@@ -2133,6 +2192,247 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"verified": True, "evidence": ev_record, "environment": F11_ENVIRONMENT})
 
 
+    # --------------------------------------------------------------------------
+    # Handlers para M6: Monitorizacion de Incidentes, Alertas e Indicadores (F4)
+    # --------------------------------------------------------------------------
+    def _handle_incidents_get(self, query: str, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_INCIDENTS", "LIST_INCIDENTS", client_ip,
+            "Acceso a la monitorizacion de incidentes restringido a Oficial de Seguridad o Administrador",
+            "INCIDENTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        status_filter = params["status"][0] if "status" in params else None
+        severity_filter = params["severity"][0] if "severity" in params else None
+        incidents = list_incidents(db_manager, status=status_filter, severity=severity_filter)
+        record_audit_event(
+            "LIST_INCIDENTS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(incidents)} incidentes", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "incidents": incidents, "count": len(incidents), "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_incident_get(self, incident_id: str, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_INCIDENTS", "GET_INCIDENT", client_ip,
+            "Acceso al incidente restringido a roles autorizados",
+            "INCIDENTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        incident = get_incident(db_manager, incident_id)
+        if not incident:
+            record_audit_event(
+                "GET_INCIDENT", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                f"Incidente {incident_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {"error": "NotFound", "message": f"Incidente {incident_id} no encontrado", "code": "INCIDENT_NOT_FOUND"})
+            return
+        incident.pop("updates", None)
+        updates = list_incident_updates(db_manager, incident["id"])
+        record_audit_event(
+            "GET_INCIDENT", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta del incidente {incident_id} y su historial", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"incident": incident, "updates": updates, "environment": F11_ENVIRONMENT})
+
+    def _handle_incident_create_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_INCIDENTS", "INCIDENT_CREATE", client_ip,
+            "El alta de incidentes exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "INCIDENT_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de incidente rechazada: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        # Regla de evidencia: todo incidente creado por API es de laboratorio. La
+        # declaracion del cliente no decide la sinteticidad; se impone aqui y se
+        # ignora cualquier 'synthetic' del payload, igual que en riesgos y controles.
+        payload = {**payload, "synthetic": 1}
+
+        errors = validate_incident(payload)
+        if errors:
+            record_audit_event(
+                "INCIDENT_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Alta de incidente rechazada por validacion: " + ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Datos de incidente invalidos",
+                "code": "INCIDENT_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+
+        try:
+            incident = create_incident(
+                db_manager, payload, context.username, role=str(list(context.roles))
+            )
+        except IncidentAlreadyExistsError as e:
+            record_audit_event(
+                "INCIDENT_CREATE", context.username, str(list(context.roles)), "DENIED_CONFLICT",
+                f"Incidente {payload.get('code')} ya existe", client_ip, context.mfa_verified,
+            )
+            self.send_json(409, {"error": "Conflict", "message": str(e), "code": "INCIDENT_ALREADY_EXISTS"})
+            return
+        except IncidentValidationError as e:
+            record_audit_event(
+                "INCIDENT_CREATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                f"Alta de incidente rechazada: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {"error": "BadRequest", "message": str(e), "code": "INCIDENT_INVALID"})
+            return
+        self.send_json(201, {"incident": incident, "environment": F11_ENVIRONMENT})
+
+    def _handle_incident_transition_post(self, incident_id: str, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "MANAGE_INCIDENTS", "INCIDENT_UPDATE", client_ip,
+            "La transicion de estado de incidentes exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "INCIDENT_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Transicion de incidente rechazada: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        # La sinteticidad no viaja en la transicion: aunque el cliente envie
+        # 'synthetic', se ignora por completo; la capa de persistencia tampoco lo toca.
+        to_status = str(payload.get("to_status") or payload.get("status") or "").strip().upper()
+        note = payload.get("note")
+        if not to_status:
+            record_audit_event(
+                "INCIDENT_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Transicion rechazada: to_status es obligatorio", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "to_status es obligatorio para transicionar el incidente",
+                "code": "INCIDENT_INVALID",
+            })
+            return
+
+        try:
+            incident = transition_incident(
+                db_manager, incident_id, to_status, note, context.username,
+                role=str(list(context.roles)),
+            )
+        except IncidentNotFoundError as e:
+            record_audit_event(
+                "INCIDENT_UPDATE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                f"Incidente {incident_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {"error": "NotFound", "message": str(e), "code": "INCIDENT_NOT_FOUND"})
+            return
+        except IncidentTransitionError as e:
+            record_audit_event(
+                "INCIDENT_UPDATE", context.username, str(list(context.roles)), "DENIED_CONFLICT",
+                f"Transicion no permitida para {incident_id}: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(409, {"error": "Conflict", "message": str(e), "code": "INCIDENT_TRANSITION_INVALID"})
+            return
+        except IncidentValidationError as e:
+            record_audit_event(
+                "INCIDENT_UPDATE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                f"Transicion de incidente rechazada: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {"error": "BadRequest", "message": str(e), "code": "INCIDENT_INVALID"})
+            return
+        self.send_json(200, {"incident": incident, "environment": F11_ENVIRONMENT})
+
+    def _handle_alerts_get(self, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_ALERTS", "LIST_ALERTS", client_ip,
+            "Acceso a las alertas derivadas restringido a Oficial de Seguridad o Administrador",
+            "ALERTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        alerts = list_alerts(db_manager)
+        record_audit_event(
+            "LIST_ALERTS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(alerts)} alertas derivadas", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "alerts": alerts, "count": len(alerts), "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_alert_ack_post(self, alert_id: str, payload: Dict[str, Any], client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "ACK_ALERTS", "ALERT_ACKNOWLEDGE", client_ip,
+            "El acuse de alertas exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "ALERT_ACKNOWLEDGE", context.username, str(list(context.roles)), "DENIED_INVALID",
+                "Acuse rechazado: cuerpo no es objeto JSON", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        note = payload.get("note")
+        try:
+            ack = acknowledge_alert(
+                db_manager, alert_id, note, context.username, role=str(list(context.roles))
+            )
+        except AlertNotFoundError as e:
+            record_audit_event(
+                "ALERT_ACKNOWLEDGE", context.username, str(list(context.roles)), "DENIED_NOT_FOUND",
+                f"Alerta {alert_id} no existe entre las derivadas", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {"error": "NotFound", "message": str(e), "code": "ALERT_NOT_FOUND"})
+            return
+        self.send_json(200, {"alert": ack, "environment": F11_ENVIRONMENT})
+
+    def _handle_indicators_get(self, client_ip: str) -> None:
+        context, failure = self._authorize_policy(
+            "VIEW_INDICATORS", "LIST_INDICATORS", client_ip,
+            "El panel de indicadores exige una sesion autenticada",
+            "INDICATORS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        indicators = list_indicators(db_manager)
+        record_audit_event(
+            "LIST_INDICATORS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(indicators)} indicadores M8", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "indicators": indicators, "count": len(indicators), "environment": F11_ENVIRONMENT,
+        })
+
+
     def do_POST(self) -> None:
         try:
             self._do_POST_internal()
@@ -2353,6 +2653,27 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 1:
                 self._handle_control_update_post(parts[0], f2_payload, client_ip)
+                return
+
+        # 1.f Monitorizacion de incidentes (M6 / F4). El handler es http.server
+        #     puro: la transicion de estado va por POST a /api/v1/incidents/{id}.
+        if parsed.path == "/api/v1/incidents":
+            self._handle_incident_create_post(f2_payload, client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/incidents/"):
+            remainder = parsed.path[len("/api/v1/incidents/"):]
+            parts = [segment for segment in remainder.split("/") if segment]
+            if len(parts) == 1:
+                self._handle_incident_transition_post(parts[0], f2_payload, client_ip)
+                return
+
+        # 1.g Acuse de alertas derivadas (M6 / F4)
+        if parsed.path.startswith("/api/v1/alerts/"):
+            remainder = parsed.path[len("/api/v1/alerts/"):]
+            parts = [segment for segment in remainder.split("/") if segment]
+            if len(parts) == 2 and parts[1] == "ack":
+                self._handle_alert_ack_post(parts[0], f2_payload, client_ip)
                 return
 
         if parsed.path == "/api/v1/auth/login":

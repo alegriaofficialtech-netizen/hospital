@@ -24,6 +24,81 @@
     </div>
   }
 
+  <!-- Indicadores M8: la rejilla principal sale de GET /api/v1/indicators -->
+  @if (canViewIndicators()) {
+    <div class="card-heading">
+      <div>
+        <h2>Indicadores de monitorización de seguridad (M8)</h2>
+        <p>
+          Valor, estado y origen real del dato, tal como los devuelve la API. El origen es la
+          consulta u operación que produjo la cifra.
+        </p>
+      </div>
+      @if (indicators().length) {
+        <p class="kpi-hint">
+          {{ criticalIndicators() }} en estado CRITICO · {{ attentionIndicators() }} en ATENCION ·
+          {{ noDataIndicators() }} sin dato
+        </p>
+      }
+    </div>
+
+    @if (indicatorsError()) {
+      <div class="inline-error" role="alert">
+        <mat-icon>error_outline</mat-icon>
+        <span>{{ indicatorsError() }}</span>
+      </div>
+    }
+
+    @if (indicators().length === 0 && !indicatorsError()) {
+      <p class="empty-state">La API no devolvió indicadores M8 para el estado actual.</p>
+    } @else if (indicators().length > 0) {
+      <div class="kpi-grid">
+        @for (ind of indicators(); track ind.code) {
+          <mat-card class="kpi-card">
+            <span class="kpi-label">{{ ind.name }}</span>
+            <strong class="kpi-value">{{ displayValue(ind) }}</strong>
+            <span
+              class="kpi-hint"
+              [style.color]="indicatorStatusColor(ind.status)"
+              style="font-weight: 700"
+            >
+              Estado: {{ ind.status }}
+            </span>
+            <span class="kpi-hint">
+              @if (targetLabel(ind); as target) {
+                Objetivo: {{ target }}
+              } @else {
+                Sin objetivo declarado
+              }
+            </span>
+
+            <button mat-button type="button" (click)="toggleOrigin(ind.code)">
+              <mat-icon>{{ isOriginExpanded(ind.code) ? 'expand_less' : 'expand_more' }}</mat-icon>
+              Origen del dato
+            </button>
+
+            @if (isOriginExpanded(ind.code)) {
+              @if (isUndeclaredSource(ind)) {
+                <div class="synthetic-banner">
+                  <mat-icon>help_outline</mat-icon>
+                  <span>
+                    Origen no declarado: la API no pudo ejecutar la consulta de origen, así que este
+                    valor no es verificable con la evidencia disponible.
+                  </span>
+                </div>
+              } @else {
+                <p class="kpi-hint">Consulta u operación real ejecutada por la API:</p>
+                <pre
+                  style="margin: 0; padding: 0.75rem; border-radius: 8px; background: var(--mat-sys-surface-container-high); border: 1px solid var(--mat-sys-outline-variant); font-size: 0.72rem; white-space: pre-wrap; word-break: break-word;"
+                >{{ ind.source }}</pre>
+              }
+            }
+          </mat-card>
+        }
+      </div>
+    }
+  }
+
   <!-- Métricas Operativas Clínicas -->
   <div class="kpi-grid">
     <mat-card class="kpi-card">

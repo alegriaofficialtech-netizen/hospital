@@ -290,9 +290,11 @@ class F3SeedIntegritySuite(unittest.TestCase):
         finding_id = self._insert_finding(db, "KC_MFA_ON_ADMIN_IDENTITIES")
         db.close()
 
-        # Retroceder la marca de version fuerza a reejecutar la migracion 7.
+        # El marco de migraciones decide por MAX(version), asi que hay que
+        # retirar tambien las posteriores: borrar solo la 7 dejaria MAX=8 y
+        # la 7 no se reejecutaria nunca.
         con = sqlite3.connect(path)
-        con.execute("DELETE FROM schema_migrations WHERE version = 7;")
+        con.execute("DELETE FROM schema_migrations WHERE version >= 7;")
         con.commit()
         con.close()
 

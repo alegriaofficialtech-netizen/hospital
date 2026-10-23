@@ -38,16 +38,20 @@ def load_setup_realm():
 
 
 def mfa_evidence(result):
-    """True si el token emitido acredita el segundo factor."""
+    """True solo si el token acredita el segundo factor en ``amr``.
+
+    Debe coincidir con el criterio del backend (``jwt_validator.py``): ``amr``
+    como lista que contenga ``otp``, ``totp`` o ``mfa-otp``. El claim ``acr``
+    no se acepta aqui porque el backend tampoco lo acepta: un arnes mas laxo
+    que el servidor esconde denegaciones reales.
+    """
     claims = result.get("claims") or {}
-    amr = claims.get("amr") or []
-    if isinstance(amr, str):
-        amr = [amr]
-    acr = str(claims.get("acr", "")).lower()
-    return (
-        any(str(value).lower() == "otp" for value in amr)
-        or "otp" in acr
-        or "mfa" in acr
+    amr = claims.get("amr")
+    if not isinstance(amr, list):
+        return False
+    return any(
+        isinstance(m, str) and m.strip().lower() in ("otp", "totp", "mfa-otp")
+        for m in amr
     )
 
 

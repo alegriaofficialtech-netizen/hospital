@@ -23,7 +23,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 ZERO_HASH = "0" * 64
 
 # Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
@@ -87,6 +87,22 @@ CONTROL_FRAMEWORKS = ("ISO_27001_2022", "NIST_SP_800_207", "CISA_ZTM")
 CONTROL_STATUSES = ("PROPUESTO", "IMPLEMENTADO", "VERIFICADO")
 CONTROL_EFFECTIVENESS = ("PREVENTIVO", "DETECTIVO", "CORRECTIVO")
 CONTROL_EVIDENCE_TYPES = ("checker", "audit_event", "automated_test", "config_file", "none")
+
+# Vocabulario y ciclo de vida de Gestion de Incidentes (M6 / F4)
+INCIDENT_SEVERITIES = ("BAJA", "MEDIA", "ALTA", "CRITICA")
+INCIDENT_STATUSES = ("ABIERTO", "EN_INVESTIGACION", "MITIGADO", "CERRADO")
+
+# Diagrama de transiciones validas del ciclo de vida de un incidente. Vive en la
+# capa de persistencia porque es la capa inferior: la API y el modulo de dominio
+# lo reutilizan en lugar de duplicarlo, de modo que ninguna via de escritura
+# puede saltarse una transicion no declarada. CERRADO es terminal: una vez
+# cerrado un incidente no vuelve a abrirse (se registra uno nuevo si reaparece).
+INCIDENT_TRANSITIONS = {
+    "ABIERTO": ("EN_INVESTIGACION", "MITIGADO", "CERRADO"),
+    "EN_INVESTIGACION": ("MITIGADO", "CERRADO"),
+    "MITIGADO": ("CERRADO", "EN_INVESTIGACION"),
+    "CERRADO": (),
+}
 
 
 def calculate_risk_level(probability: int, impact: int) -> Tuple[int, str]:
@@ -161,6 +177,31 @@ class ControlNotFoundError(DatabaseError):
 
 class ControlEvidenceMissingError(DatabaseError):
     """Un control no puede marcarse como VERIFICADO sin evidencia real enlazada."""
+    pass
+
+
+class IncidentValidationError(DatabaseError):
+    """El incidente no cumple con el vocabulario o valores permitidos (M6)."""
+    pass
+
+
+class IncidentAlreadyExistsError(DatabaseError):
+    """Ya existe un incidente registrado con el mismo codigo (M6)."""
+    pass
+
+
+class IncidentNotFoundError(DatabaseError):
+    """El incidente solicitado no existe (M6)."""
+    pass
+
+
+class IncidentTransitionError(DatabaseError):
+    """La transicion de estado solicitada no esta declarada en el ciclo de vida (M6)."""
+    pass
+
+
+class AlertNotFoundError(DatabaseError):
+    """La alerta no existe entre las derivadas del estado real de la plataforma (M6)."""
     pass
 
 
@@ -670,6 +711,68 @@ class ClinicalDatabaseManager:
                           AND finding_id NOT IN (SELECT id FROM security_findings);
                     """)
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (7, datetime('now'));")
+
+
+                if current_ver < 8:
+                    # Migracion 8: modulo M6 de monitorizacion de incidentes,
+                    # alertas derivadas y acuses (F4). Es aditiva e idempotente:
+                    # solo crea tablas nuevas (CREATE TABLE IF NOT EXISTS) y no
+                    # altera ninguna existente, por lo que es segura sobre una
+                    # base ya poblada por las migraciones 1..7. Las alertas NO
+                    # se persisten: se derivan del estado real en cada consulta;
+                    # lo unico que se guarda es el acuse. El historial de
+                    # transiciones (incident_updates) es inmutable: no se edita
+                    # ni se borra, solo se anexa.
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS incidents (
+                            id TEXT PRIMARY KEY,
+                            code TEXT NOT NULL UNIQUE,
+                            title TEXT NOT NULL,
+                            description TEXT NOT NULL DEFAULT '',
+                            severity TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            detected_at REAL NOT NULL,
+                            closed_at REAL,
+                            asset_id TEXT REFERENCES assets(id),
+                            risk_id TEXT REFERENCES risks(id),
+                            control_id TEXT REFERENCES controls(id),
+                            owner_role TEXT NOT NULL DEFAULT '',
+                            synthetic INTEGER NOT NULL DEFAULT 1,
+                            revision INTEGER NOT NULL DEFAULT 1,
+                            created_by TEXT NOT NULL DEFAULT '',
+                            created_at REAL NOT NULL,
+                            updated_at REAL NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_detected ON incidents(detected_at DESC);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_asset ON incidents(asset_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_risk ON incidents(risk_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_control ON incidents(control_id);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS incident_updates (
+                            id TEXT PRIMARY KEY,
+                            incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                            from_status TEXT,
+                            to_status TEXT NOT NULL,
+                            note TEXT NOT NULL DEFAULT '',
+                            actor TEXT NOT NULL,
+                            occurred_at REAL NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_updates_incident ON incident_updates(incident_id);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS alert_acknowledgements (
+                            alert_id TEXT PRIMARY KEY,
+                            acknowledged_by TEXT NOT NULL,
+                            acknowledged_at REAL NOT NULL,
+                            note TEXT NOT NULL DEFAULT ''
+                        );
+                    """)
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (8, datetime('now'));")
 
 
                 cur.execute("COMMIT;")
@@ -2474,6 +2577,299 @@ class ClinicalDatabaseManager:
             return dict(cur.fetchone())
 
         return self.run_clinical_transaction(operation, audit_event)
+
+    # --------------------------------------------------------------------------
+    # M6: MONITORIZACION DE INCIDENTES, ALERTAS DERIVADAS Y ACUSES (F4)
+    # --------------------------------------------------------------------------
+    def _insert_incident_update_cursor(
+        self,
+        cur: sqlite3.Cursor,
+        incident_id: str,
+        from_status: Optional[str],
+        to_status: str,
+        note: str,
+        actor: str,
+        occurred_at: float,
+    ) -> str:
+        """Anexa una transicion de estado al historial inmutable del incidente.
+
+        El historial nunca se edita ni se borra: cada cambio de estado deja una
+        fila nueva con el estado de origen, el de destino, quien lo hizo y cuando.
+        """
+        digest = hashlib.sha256(
+            ("%s|%s|%s|%s|%.6f" % (
+                incident_id, from_status or "", to_status, str(actor or ""), occurred_at,
+            )).encode("utf-8")
+        ).hexdigest()[:12].upper()
+        update_id = "UPI-" + digest
+        cur.execute("""
+            INSERT INTO incident_updates (
+                id, incident_id, from_status, to_status, note, actor, occurred_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+        """, (
+            update_id, incident_id, from_status, to_status,
+            str(note or ""), str(actor or "SYSTEM"), float(occurred_at),
+        ))
+        return update_id
+
+    def _list_incident_updates_cursor(
+        self, cur: sqlite3.Cursor, incident_id: str
+    ) -> List[Dict[str, Any]]:
+        """Lee el historial de transiciones de un incidente con el cursor abierto."""
+        cur.execute(
+            "SELECT * FROM incident_updates WHERE incident_id = ? "
+            "ORDER BY occurred_at ASC, rowid ASC;",
+            (incident_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def _insert_incident_cursor(
+        self, cur: sqlite3.Cursor, incident: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Inserta un incidente y su transicion inicial en una transaccion abierta.
+
+        La capa de persistencia fuerza ``synthetic = 1``: todo incidente creado
+        desde la plataforma es de laboratorio, y la declaracion del cliente no
+        puede cambiarlo. El alta registra la primera fila del historial
+        (None -> estado inicial) para que la traza quede completa.
+        """
+        code = str(incident.get("code") or "").strip()
+        if not code:
+            raise IncidentValidationError("El code del incidente es obligatorio.")
+        title = str(incident.get("title") or "").strip()
+        if not title:
+            raise IncidentValidationError("El title del incidente es obligatorio.")
+        severity = str(incident.get("severity") or "").strip().upper()
+        if severity not in INCIDENT_SEVERITIES:
+            raise IncidentValidationError(
+                "Severidad '%s' no admitida. Opciones: %s"
+                % (severity, ", ".join(INCIDENT_SEVERITIES))
+            )
+        status = str(incident.get("status") or "ABIERTO").strip().upper()
+        if status not in INCIDENT_STATUSES:
+            raise IncidentValidationError(
+                "Estado '%s' no admitido. Opciones: %s"
+                % (status, ", ".join(INCIDENT_STATUSES))
+            )
+
+        incident_id = str(
+            incident.get("id")
+            or ("INC-" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:8].upper())
+        )
+        now = time.time()
+        raw_detected = incident.get("detected_at")
+        try:
+            detected_at = float(raw_detected) if raw_detected is not None else now
+        except (TypeError, ValueError):
+            detected_at = now
+        closed_at = now if status == "CERRADO" else None
+        actor = str(incident.get("created_by") or "SYSTEM")
+
+        try:
+            cur.execute("""
+                INSERT INTO incidents (
+                    id, code, title, description, severity, status, detected_at,
+                    closed_at, asset_id, risk_id, control_id, owner_role,
+                    synthetic, revision, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                incident_id, code, title,
+                str(incident.get("description") or "").strip(),
+                severity, status, detected_at, closed_at,
+                incident.get("asset_id"), incident.get("risk_id"), incident.get("control_id"),
+                str(incident.get("owner_role") or "").strip(),
+                1, 1, actor, now, now,
+            ))
+        except sqlite3.IntegrityError as exc:
+            message = str(exc)
+            if "UNIQUE" in message.upper() or "PRIMARY KEY" in message.upper():
+                raise IncidentAlreadyExistsError(
+                    "Ya existe un incidente con el codigo '%s'." % code
+                ) from exc
+            # Un vinculo declarado a un activo/riesgo/control inexistente choca
+            # con la clave foranea: se reporta como dato invalido, no como
+            # duplicado, para que el cliente reciba el motivo real.
+            raise IncidentValidationError(
+                "Vinculo de incidente invalido: %s" % message
+            ) from exc
+
+        self._insert_incident_update_cursor(
+            cur, incident_id, None, status, "Alta del incidente", actor, now
+        )
+
+        cur.execute("SELECT * FROM incidents WHERE id = ?;", (incident_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else {"id": incident_id}
+
+    def insert_incident_with_audit_event(
+        self, incident: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Da de alta un incidente y su auditoria en una sola transaccion atomica."""
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_incident_cursor(cur, incident), audit_event
+        )
+
+    def insert_incidents_with_audit_event(
+        self, incidents: List[Dict[str, Any]], audit_event: Dict[str, Any]
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        """Inserta un lote de incidentes con auditoria atomica (usado por la siembra)."""
+        def operation(cur: sqlite3.Cursor) -> List[str]:
+            created: List[str] = []
+            for incident in incidents:
+                self._insert_incident_cursor(cur, incident)
+                created.append(str(incident.get("code") or ""))
+            return created
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def update_incident_status_with_audit_event(
+        self,
+        incident_id: str,
+        to_status: str,
+        note: str,
+        actor: str,
+        audit_event: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Aplica una transicion de estado validada y la audita en una sola transaccion.
+
+        La transicion se valida contra INCIDENT_TRANSITIONS: una transicion no
+        declarada se rechaza (IncidentTransitionError) y no toca ni el estado ni
+        el historial. La sinteticidad del incidente nunca cambia en una
+        transicion: el incidente siguio siendo de laboratorio.
+        """
+        status = str(to_status or "").strip().upper()
+        if status not in INCIDENT_STATUSES:
+            raise IncidentValidationError(
+                "Estado '%s' no admitido. Opciones: %s"
+                % (status, ", ".join(INCIDENT_STATUSES))
+            )
+
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            cur.execute(
+                "SELECT * FROM incidents WHERE id = ? OR code = ?;",
+                (incident_id, incident_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise IncidentNotFoundError("El incidente '%s' no existe." % incident_id)
+            current = dict(row)
+            from_status = str(current["status"])
+            allowed = INCIDENT_TRANSITIONS.get(from_status, ())
+            if status not in allowed:
+                raise IncidentTransitionError(
+                    "Transicion no permitida para el incidente '%s': %s -> %s. "
+                    "Desde %s solo se admite: %s"
+                    % (
+                        incident_id, from_status, status, from_status,
+                        (", ".join(allowed) or "ninguna transicion (estado terminal)"),
+                    )
+                )
+
+            now = time.time()
+            closed_at = now if status == "CERRADO" else current.get("closed_at")
+            cur.execute("""
+                UPDATE incidents SET
+                    status = ?, closed_at = ?, updated_at = ?, revision = revision + 1
+                WHERE id = ?;
+            """, (status, closed_at, now, current["id"]))
+            self._insert_incident_update_cursor(
+                cur, current["id"], from_status, status, note, actor, now
+            )
+            cur.execute("SELECT * FROM incidents WHERE id = ?;", (current["id"],))
+            return dict(cur.fetchone())
+
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def get_incident(self, incident_id_or_code: str) -> Optional[Dict[str, Any]]:
+        """Recupera un incidente con su historial completo de transiciones."""
+        def op(cur: sqlite3.Cursor) -> Optional[Dict[str, Any]]:
+            cur.execute(
+                "SELECT * FROM incidents WHERE id = ? OR code = ?;",
+                (incident_id_or_code, incident_id_or_code),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["updates"] = self._list_incident_updates_cursor(cur, result["id"])
+            return result
+        return self._run_simple_read(op)
+
+    def list_incident_updates(self, incident_id: str) -> List[Dict[str, Any]]:
+        """Lista el historial de transiciones de un incidente."""
+        return self._run_simple_read(
+            lambda cur: self._list_incident_updates_cursor(cur, incident_id)
+        )
+
+    def list_incidents(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Lista incidentes aplicando filtros opcionales de estado y severidad."""
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            query = "SELECT * FROM incidents WHERE 1=1"
+            params: List[Any] = []
+            if filters:
+                if filters.get("status"):
+                    query += " AND status = ?"
+                    params.append(str(filters["status"]).strip().upper())
+                if filters.get("severity"):
+                    query += " AND severity = ?"
+                    params.append(str(filters["severity"]).strip().upper())
+            query += " ORDER BY detected_at DESC, code ASC;"
+            cur.execute(query, tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
+
+    def get_alert_acknowledgements(self) -> Dict[str, Dict[str, Any]]:
+        """Devuelve los acuses registrados indexados por id de alerta derivada."""
+        def op(cur: sqlite3.Cursor) -> Dict[str, Dict[str, Any]]:
+            cur.execute("SELECT * FROM alert_acknowledgements;")
+            return {str(r["alert_id"]): dict(r) for r in cur.fetchall()}
+        return self._run_simple_read(op)
+
+    def insert_alert_ack_with_audit_event(
+        self,
+        alert_id: str,
+        acknowledged_by: str,
+        note: str,
+        audit_event: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Registra el acuse de una alerta derivada y su auditoria en una sola transaccion.
+
+        Es lo unico que se persiste de una alerta: la alerta en si se deriva del
+        estado real. Un id inexistente no llega hasta aqui: el modulo de dominio
+        comprueba antes que la alerta exista entre las derivadas.
+        """
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            now = time.time()
+            cur.execute("""
+                INSERT INTO alert_acknowledgements (alert_id, acknowledged_by, acknowledged_at, note)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(alert_id) DO UPDATE SET
+                    acknowledged_by = excluded.acknowledged_by,
+                    acknowledged_at = excluded.acknowledged_at,
+                    note = excluded.note;
+            """, (
+                str(alert_id), str(acknowledged_by or "SYSTEM"), now, str(note or ""),
+            ))
+            cur.execute(
+                "SELECT * FROM alert_acknowledgements WHERE alert_id = ?;", (str(alert_id),)
+            )
+            return dict(cur.fetchone())
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def monitoring_query(
+        self, sql: str, params: Tuple[Any, ...] = ()
+    ) -> List[Dict[str, Any]]:
+        """Ejecuta una consulta de solo lectura del modulo de monitorizacion (M6).
+
+        Es el unico acceso SQL directo que el modulo de alertas e indicadores
+        necesita para declarar el origen real de su evidencia: la cadena SQL que
+        se muestra en ``evidence``/``source`` es exactamente la que se ejecuta.
+        La sentencia la fija el propio codigo del modulo (nunca un cliente HTTP),
+        no escribe y no admite varios statements.
+        """
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            cur.execute(sql, tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
 
 
 class DatabaseBackedOrdersDict(collections.abc.MutableMapping):

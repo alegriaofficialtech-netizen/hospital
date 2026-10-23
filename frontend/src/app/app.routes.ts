@@ -55,6 +55,7 @@ export const routes: Routes = [
             'ROLE_LAB_TECH',
             'ROLE_PATHOLOGIST',
             'ROLE_SECURITY_AUDITOR',
+            'ROLE_PLATFORM_ADMIN',
           ]),
         ],
         loadComponent: () =>
@@ -93,6 +94,18 @@ export const routes: Routes = [
         canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
         loadComponent: () =>
           import('./features/controls/controls.component').then((m) => m.ControlsComponent),
+      },
+      {
+        path: 'incidentes',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/incidents/incidents.component').then((m) => m.IncidentsComponent),
+      },
+      {
+        path: 'alertas',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/alerts/alerts.component').then((m) => m.AlertsComponent),
       },
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
     ],
