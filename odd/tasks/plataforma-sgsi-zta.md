@@ -1,6 +1,6 @@
 # Plataforma SGSI-ZTA — objetivos de tesis, modulos y fases
 
-Rama: `feat/f11-preflight-gate` (commits locales, sin push, sin cutover).
+Rama: `feat/f11-f3-risks-controls` (commits locales, sin push, sin cutover).
 Servidor: `servidor-1` (`/home/elcra/sgsi-zta-integration`).
 
 ## 1. Que cambia
@@ -445,7 +445,8 @@ F5 queda implementada y verificada sobre la rama `feat/f11-f3-risks-controls`, c
 - Estado actual: **749 elementos** (O1 594, O2 42, O3 61, O4 52).
 
 **Informes** (generados solo desde datos reales):
-- `reports` guarda el Markdown generado, su `content_hash` (sha256) y un codigo determinista `RPT-<objetivo>-<hash corto>`: mismo contenido y mismo periodo dan el mismo codigo.
+- `reports` guarda el Markdown generado y su `content_hash` (sha256 exacto del documento). El codigo `RPT-<objetivo>-<hash corto>` es el prefijo de ese hash: **identifica el documento exacto, no los datos**. Como el documento lleva dentro la fecha de generacion, dos generaciones sobre los mismos datos producen documentos y codigos distintos; la deduplicacion solo ocurre cuando el contenido es byte a byte identico. Es un diseno de instantanea auditable, no de informe vivo, y las pruebas fijan esa relacion (`code = RPT-<obj>-<content_hash[:8]>`).
+- Consecuencia en O4: el informe incluye el estado de la cadena de auditoria y generar un informe **escribe** un evento de auditoria, asi que el siguiente informe O4 difiere por construccion. Los objetivos O1..O3 no se ven afectados por esa autorreferencia.
 - Secciones obligatorias: metricas reales, **datos sinteticos** (cuantos registros lo son), **limitaciones** (lo que no existe o no puede probarse) y referencias de evidencia.
 - Si no hay dictamenes, el informe **lo dice**; no rellena el hueco. Prohibido el texto inventado: todo lo que afirma el informe sale de una fila.
 - Endpoints: `GET /api/v1/reports`, `POST /api/v1/reports`, `GET /api/v1/reports/{id}`.
@@ -493,3 +494,71 @@ El catalogo de modulos de la seccion 3 (M0 a M9) describe los modulos del sistem
 | Registro de evidencias e informes | F5 | consolidar en un solo lugar la evidencia que ya producen M2 a M8 y emitir informes con hash, sin reescribir a mano lo que la plataforma ya demuestra | O1 a O4 |
 
 Ninguna de estas piezas anade una fuente de verdad nueva: las alertas, la evidencia y los informes se **derivan** de lo que ya existe, y el instrumento solo mide. Es la diferencia entre ampliar el alcance y duplicarlo.
+
+## Verificacion final consolidada (2026-10-22)
+
+Cierre de la entrega: regresion completa, seguridad de la cadena y del acceso, e integracion de la cadena O1 -> O4. Todo ejecutado contra la pila real de `servidor-1`, sin tocar `/opt`, produccion ni otros servicios.
+
+### Migraciones
+
+- **Base nueva desde cero**: llega a la version 9 (`[1..9]`) y crea las 13 tablas de todas las fases.
+- **Siembra**: el instrumento de validacion se siembra **una sola vez** (1 instrumento, 14 items) aunque se invoque dos veces, y **no siembra dictamenes** (0).
+- **Reaplicacion sobre una copia de la base viva**: el esquema y la version quedan identicos; no hay efecto lateral.
+
+La copia se hizo con la API de backup de SQLite, no copiando el fichero: la base viva esta en modo WAL y una copia manual perderia las transacciones pendientes. La base exige ademas su archivo lateral `.anchor-key`; sin el, el arranque **falla cerrado** (`AuditChainCorruptedError`). Es una propiedad de seguridad real: una base robada sin su clave no se puede abrir como si nada.
+
+### Cadena de auditoria y fugas de secretos
+
+- **2664 eventos**, 0 rupturas de enlace (`prev_hash` contra el `event_hash` anterior, empezando por `ZERO_HASH`) y **0 eventos manipulados**: se recalculo el sha256 de cada `raw_json` y coinciden todos.
+- **0 fugas de credenciales** en los eventos de auditoria, con una busqueda por **forma de valor** (JWT `eyJ...`, asignaciones `password=`/`access_token:`, semillas base32 junto a `totp_secret`). Hay 204 eventos que **mencionan** TOTP o MFA en prosa ("intento de validacion sin evidencia de MFA (TOTP)"); una mencion no es una fuga y el escaneo no las confunde.
+
+### Matriz de acceso en vivo
+
+Tokens reales emitidos por el flujo OIDC de Keycloak para los cinco usuarios declarados.
+
+| Ruta (GET) | admin MFA | auditor | laboratorio | recepcion |
+|---|---|---|---|---|
+| `/api/v1/incidents` | 200 | 200 | 403 | 403 |
+| `/api/v1/alerts` | 200 | 200 | 403 | 403 |
+| `/api/v1/instruments` | 200 | 200 | 403 | 403 |
+| `/api/v1/validations` | 200 | 200 | 403 | 403 |
+| `/api/v1/evidence` | 200 | 200 | 403 | 403 |
+| `/api/v1/reports` | 200 | 200 | 403 | 403 |
+| `/api/v1/indicators` | 200 | 200 | 200 | 200 |
+
+| Ruta (POST) | admin sin MFA | auditor | laboratorio |
+|---|---|---|---|
+| `/api/v1/incidents` | 403 | 403 | 403 |
+| `/api/v1/instruments` | 403 | 403 | 403 |
+| `/api/v1/validations` | 403 | 403 | 403 |
+| `/api/v1/reports` | 403 | 403 | 403 |
+
+El minimo privilegio se cumple en los dos sentidos: quien no debe leer recibe 403, y **el administrador sin MFA tampoco escribe**. `VIEW_INDICATORS` es el unico panel abierto a todos los autenticados, y es solo lectura.
+
+### Cadena O1 -> O4
+
+| Objetivo | Elementos de evidencia | Referencia de muestra |
+|---|---|---|
+| O1 (diagnostico y hallazgos) | 594 | `M2 | FND-20CA3D01` |
+| O2 (riesgos y activos) | 42 | `M4 | RSK-F4-ALR-5478303` |
+| O3 (controles y evidencia) | 61 | `M5 | CISA-APP-01` |
+| O4 (incidentes, auditoria e indicadores) | 52 | `M6 | INC-...` |
+
+**749 elementos** derivados, cada uno con su referencia real y su origen. El informe O4 se genero de verdad contra la pila: **16891 caracteres**, con las cuatro secciones obligatorias (metricas reales, datos sinteticos, limitaciones, referencias de evidencia), recuperado integro por su id y con el hash coincidente.
+
+### Superficie de la API
+
+**26 rutas exactas** y **10 prefijos** con `startswith`. Ningun handler que acepte `POST` omite el control de permiso (comprobado recorriendo los cuerpos de todos los `_handle_*`).
+
+### Estado final
+
+- Suite **166/166** (10 admin, 12 API, 28 F2, 34 F3, 38 F4, 39 F5, 5 solicitudes de identidad).
+- Base: 2664 eventos de auditoria, 594 hallazgos, 26 activos, 26 riesgos, 49 controles, 12 evidencias de control, 17 incidentes, 26 transiciones, 2 instrumentos (1 sembrado + 1 de la suite), 16 items, 1 dictamen sintetico, 4 informes.
+- Pila arriba (Keycloak, frontend y backend), 75 C.
+
+### Pendiente real (no ejecutado)
+
+1. **Dictamenes de expertos reales**: cero. El instrumento esta listo y la pantalla lo declara; falta que un experto humano firme. No se invento ninguno.
+2. **`admin.test`**: el alta existe pero su TOTP sigue sin enrolar; `medico.test` es el administrador provisional con `sgsi-admin`. Procedimiento en `odd/tasks/procedimiento-enrolamiento-admin.md`.
+3. **Re-sembrar la base** antes de una demostracion: la suite deja filas sinteticas (marcadas) en riesgos, controles, incidentes, instrumentos, dictamenes e informes.
+4. **Despliegue**: todo es local, sin corte a produccion y sin push (47 commits por delante de `master` en la rama `feat/f11-f3-risks-controls`).
