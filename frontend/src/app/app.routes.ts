@@ -107,6 +107,36 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/alerts/alerts.component').then((m) => m.AlertsComponent),
       },
+      // M9: validacion por expertos. La validacion clinica vive en /medico y
+      // sigue perteneciendo al componente doctor: no se reutiliza ni se toca.
+      {
+        path: 'validacion-expertos',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/validation/validation.component').then(
+            (m) => m.ValidationComponent,
+          ),
+      },
+      {
+        path: 'instrumentos',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/instruments/instruments.component').then(
+            (m) => m.InstrumentsComponent,
+          ),
+      },
+      {
+        path: 'evidencias',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/evidence/evidence.component').then((m) => m.EvidenceComponent),
+      },
+      {
+        path: 'informes',
+        canActivate: [roleGuard(['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'])],
+        loadComponent: () =>
+          import('./features/reports/reports.component').then((m) => m.ReportsComponent),
+      },
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
     ],
   },

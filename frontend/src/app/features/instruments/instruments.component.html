@@ -1,0 +1,395 @@
+<section class="instruments-page" aria-label="Instrumentos de validación por expertos">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>science</mat-icon>
+        <span>Módulo M9 · Validación por expertos</span>
+      </div>
+      <h1>Instrumentos de validación</h1>
+      <p class="subtitle">
+        Herramientas de medida del modelo Zero Trust: qué se observa, en qué dimensión y con qué
+        peso. Un instrumento no contiene ninguna evaluación ni dictamen.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (canManage()) {
+        <button mat-flat-button color="primary" (click)="openForm()">
+          <mat-icon>add</mat-icon>
+          Nuevo instrumento
+        </button>
+      }
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- Resumen -->
+  <div class="kpi-grid">
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="primary">science</mat-icon>
+        <mat-card-title>Instrumentos</mat-card-title>
+        <mat-card-subtitle>Herramientas registradas en la API</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ instruments().length }}</div>
+        <div class="kpi-sub">No son evaluaciones: solo el instrumento de medida</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="accent">checklist</mat-icon>
+        <mat-card-title>Items declarados</mat-card-title>
+        <mat-card-subtitle>Suma de items de todos los instrumentos</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ totalItems() }}</div>
+        <div class="kpi-sub">Enunciados verificables agrupados por dimensión</div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+
+  <!-- Lista de instrumentos -->
+  <mat-card class="table-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar color="primary">table_chart</mat-icon>
+      <mat-card-title>Instrumentos registrados</mat-card-title>
+      <mat-card-subtitle>{{ instruments().length }} registros recuperados de la API</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content class="table-content">
+      @if (loading()) {
+        <div class="loading-shade">
+          <mat-progress-spinner mode="indeterminate" diameter="48"></mat-progress-spinner>
+          <span>Consultando instrumentos...</span>
+        </div>
+      }
+
+      <div class="table-responsive">
+        <table mat-table [dataSource]="instruments()" class="mat-elevation-z0">
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef>Código</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="code-badge">{{ r.code }}</span>
+              @if (r.synthetic) {
+                <span class="synthetic-tag" title="Instrumento sintético de laboratorio">SINT</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef>Nombre</th>
+            <td mat-cell *matCellDef="let r">
+              <div class="instrument-name">{{ r.name }}</div>
+              <div class="instrument-desc">{{ r.description || 'Sin descripción registrada.' }}</div>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="version">
+            <th mat-header-cell *matHeaderCellDef>Versión</th>
+            <td mat-cell *matCellDef="let r"><code>{{ r.version }}</code></td>
+          </ng-container>
+
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef>Estado</th>
+            <td mat-cell *matCellDef="let r">
+              <span [class]="'status-chip ' + statusClass(r.status)">{{ r.status }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="scale">
+            <th mat-header-cell *matHeaderCellDef>Escala</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="scale-cell">{{ r.scale_min }} – {{ r.scale_max }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="item_count">
+            <th mat-header-cell *matHeaderCellDef>Items</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="count-badge">{{ r.item_count ?? 0 }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let r">
+              <button mat-icon-button color="primary" (click)="selectInstrument(r)" title="Ver detalle e items">
+                <mat-icon>visibility</mat-icon>
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr
+            mat-row
+            *matRowDef="let row; columns: displayedColumns"
+            [class.selected-row]="selected()?.id === row.id"
+          ></tr>
+        </table>
+      </div>
+
+      @if (!loading() && instruments().length === 0) {
+        <mat-card class="empty-card">
+          <mat-icon>science</mat-icon>
+          <h2>No hay instrumentos de validación registrados</h2>
+          <p>
+            La API no devolvió ningún instrumento. Sin instrumento no se puede registrar un
+            dictamen: el instrumento es la herramienta de medida que el experto responde.
+          </p>
+        </mat-card>
+      }
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Detalle con items agrupados por dimension -->
+  @if (selected(); as instrument) {
+    <div class="detail-section">
+      <mat-card class="detail-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">science</mat-icon>
+          <div class="header-content">
+            <mat-card-title>{{ instrument.name }}</mat-card-title>
+            <mat-card-subtitle>
+              <code>{{ instrument.code }}</code> · versión {{ instrument.version }} · escala
+              {{ instrument.scale_min }}–{{ instrument.scale_max }}
+            </mat-card-subtitle>
+          </div>
+          <span [class]="'status-chip ' + statusClass(instrument.status)">{{ instrument.status }}</span>
+          <button mat-icon-button (click)="clearSelection()" class="close-btn" title="Cerrar detalle">
+            <mat-icon>close</mat-icon>
+          </button>
+        </mat-card-header>
+
+        <mat-card-content>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Descripción</span>
+              <p class="detail-desc">{{ instrument.description || 'Sin descripción registrada.' }}</p>
+            </div>
+
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Escala de respuesta</span>
+                <span class="detail-val">{{ instrument.scale_min }} a {{ instrument.scale_max }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Items</span>
+                <span class="detail-val">{{ instrument.items?.length ?? 0 }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Registrado por</span>
+                <span class="detail-val">{{ instrument.created_by || 'SYSTEM' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Alta</span>
+                <span class="detail-val">{{ toDate(instrument.created_at) | date: 'medium' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="items-block">
+            <h3>
+              <mat-icon>checklist</mat-icon>
+              Items por dimensión
+            </h3>
+
+            @if (loadingDetail()) {
+              <div class="mini-loading">
+                <mat-progress-spinner mode="indeterminate" diameter="24"></mat-progress-spinner>
+                <span>Cargando items...</span>
+              </div>
+            } @else if (groupedItems().length === 0) {
+              <p class="empty-sub">La API no devolvió items para este instrumento.</p>
+            } @else {
+              @for (group of groupedItems(); track group.dimension) {
+                <div class="dimension-block">
+                  <h4>
+                    <mat-icon class="mini-icon">category</mat-icon>
+                    {{ group.label }}
+                    <span class="dimension-code">{{ group.dimension }}</span>
+                    <span class="dimension-count">{{ group.items.length }} items</span>
+                  </h4>
+
+                  <ul class="item-list">
+                    @for (item of group.items; track item.id) {
+                      <li class="item-row">
+                        <span class="item-code">{{ item.code }}</span>
+                        <p class="item-statement">{{ item.statement }}</p>
+                        <span class="item-weight" title="Peso declarado del item">peso {{ item.weight }}</span>
+                      </li>
+                    }
+                  </ul>
+                </div>
+              }
+            }
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Alta de instrumento -->
+  @if (showForm()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">add</mat-icon>
+          <mat-card-title>Registrar instrumento de validación</mat-card-title>
+          <mat-card-subtitle>
+            Requiere rol administrador de plataforma y segundo factor (MFA) acreditado
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (formError()) {
+            <div class="error-banner" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ formError() }}</span>
+            </div>
+          }
+
+          <div class="form-grid">
+            <mat-form-field appearance="outline">
+              <mat-label>Código del instrumento</mat-label>
+              <input matInput [(ngModel)]="formCode" placeholder="Ej: INSTR-F11-ZTA-02" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Versión</mat-label>
+              <input matInput [(ngModel)]="formVersion" placeholder="Ej: 1.0" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Nombre</mat-label>
+              <input matInput [(ngModel)]="formName" placeholder="Nombre de la herramienta de medida" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Descripción</mat-label>
+              <textarea matInput [(ngModel)]="formDescription" rows="3"></textarea>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Escala mínima</mat-label>
+              <input matInput type="number" [(ngModel)]="formScaleMin" min="0" step="1">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Escala máxima</mat-label>
+              <input matInput type="number" [(ngModel)]="formScaleMax" min="1" step="1">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Estado</mat-label>
+              <mat-select [(ngModel)]="formStatus">
+                @for (status of statuses; track status) {
+                  <mat-option [value]="status">{{ status }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+          </div>
+
+          <div class="items-form">
+            <div class="items-form-head">
+              <h3>Items del instrumento ({{ draftItems().length }})</h3>
+              <button mat-stroked-button type="button" (click)="addItem()">
+                <mat-icon>add</mat-icon>
+                Añadir ítem
+              </button>
+            </div>
+
+            @for (item of draftItems(); track $index; let i = $index) {
+              <div class="item-form-row">
+                <mat-form-field appearance="outline" class="item-code-field">
+                  <mat-label>Código</mat-label>
+                  <input
+                    matInput
+                    [ngModel]="item.code"
+                    (ngModelChange)="patchItem(i, { code: $event })"
+                    placeholder="Ej: ID-01"
+                  >
+                </mat-form-field>
+
+                <mat-form-field appearance="outline" class="item-dimension-field">
+                  <mat-label>Dimensión</mat-label>
+                  <mat-select
+                    [ngModel]="item.dimension"
+                    (ngModelChange)="patchItem(i, { dimension: $event })"
+                  >
+                    @for (dimension of dimensions; track dimension) {
+                      <mat-option [value]="dimension">{{ dimensionLabels[dimension] }}</mat-option>
+                    }
+                  </mat-select>
+                </mat-form-field>
+
+                <mat-form-field appearance="outline" class="item-weight-field">
+                  <mat-label>Peso</mat-label>
+                  <input
+                    matInput
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    [ngModel]="item.weight"
+                    (ngModelChange)="patchItem(i, { weight: $event })"
+                  >
+                </mat-form-field>
+
+                <mat-form-field appearance="outline" class="item-statement-field">
+                  <mat-label>Enunciado verificable</mat-label>
+                  <textarea
+                    matInput
+                    rows="2"
+                    [ngModel]="item.statement"
+                    (ngModelChange)="patchItem(i, { statement: $event })"
+                  ></textarea>
+                </mat-form-field>
+
+                <button
+                  mat-icon-button
+                  type="button"
+                  color="warn"
+                  (click)="removeItem(i)"
+                  [disabled]="draftItems().length === 1"
+                  title="Quitar ítem"
+                >
+                  <mat-icon>delete</mat-icon>
+                </button>
+              </div>
+            }
+          </div>
+
+          <p class="form-note">
+            La marca de instrumento sintético la impone el servidor. Solo un instrumento en estado
+            ACTIVO admite dictámenes: uno en BORRADOR se registra pero la API rechazará las
+            respuestas hasta que se active.
+          </p>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelForm()" [disabled]="saving()">Cancelar</button>
+          <button mat-flat-button color="primary" (click)="saveInstrument()" [disabled]="saving()">
+            @if (saving()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Registrar instrumento
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+</section>

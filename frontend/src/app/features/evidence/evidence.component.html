@@ -1,0 +1,188 @@
+<section class="evidence-page" aria-label="Inventario de evidencia por objetivo">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>folder_open</mat-icon>
+        <span>F11 · Cierre documental</span>
+      </div>
+      <h1>Evidencias por objetivo</h1>
+      <p class="subtitle">
+        Inventario derivado de datos reales, agrupado por los objetivos O1..O4. Cada elemento
+        declara su referencia real y la operación que lo produce; si un objetivo no tiene
+        evidencia, la API lo declara vacío.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- Recuento por objetivo (siempre los cuatro) -->
+  <div class="kpi-grid">
+    @for (objective of objectives; track objective) {
+      <mat-card class="kpi-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">flag</mat-icon>
+          <mat-card-title>{{ objective }}</mat-card-title>
+          <mat-card-subtitle>{{ objectiveLabels[objective] }}</mat-card-subtitle>
+        </mat-card-header>
+        <mat-card-content>
+          <div class="kpi-value">{{ countFor(objective) }}</div>
+          <span
+            [class]="'declaration-chip ' + (declarationFor(objective) === 'CON_EVIDENCIA' ? 'con-evidencia' : 'sin-evidencia')"
+          >
+            {{ declarationFor(objective) }}
+          </span>
+        </mat-card-content>
+      </mat-card>
+    }
+  </div>
+
+  <!-- Selector de objetivo -->
+  <mat-card class="filters-card">
+    <mat-card-content class="filters-content">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Objetivo</mat-label>
+        <mat-select [ngModel]="objective()" (ngModelChange)="objective.set($event)">
+          <mat-option value="ALL">Todos los objetivos · {{ total() }} elementos</mat-option>
+          @for (objective of objectives; track objective) {
+            <mat-option [value]="objective">
+              {{ objective }} · {{ objectiveLabels[objective] }} · {{ countFor(objective) }} elementos
+            </mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <p class="filters-hint">
+        El inventario es derivado: si una fuente desaparece, su evidencia desaparece con ella. El
+        selector solo filtra la vista; los recuentos son los que devolvió la API.
+      </p>
+    </mat-card-content>
+  </mat-card>
+
+  @if (loading()) {
+    <div class="loading-shade">
+      <mat-progress-spinner mode="indeterminate" diameter="44"></mat-progress-spinner>
+      <span>Derivando evidencia del estado real...</span>
+    </div>
+  } @else if (groups().length === 0) {
+    <mat-card class="empty-card">
+      <mat-icon>folder_off</mat-icon>
+      <h2>La API no devolvió inventario de evidencia</h2>
+      <p>
+        No se recibió ningún grupo O1..O4. Esta pantalla no rellena objetivos ausentes con datos de
+        ejemplo: la ausencia se declara, no se disimula.
+      </p>
+    </mat-card>
+  } @else {
+    @if (emptyGroups() === objectives.length) {
+      <mat-card class="empty-card">
+        <mat-icon>folder_off</mat-icon>
+        <h2>Los cuatro objetivos están SIN_EVIDENCIA</h2>
+        <p>
+          La API derivó los cuatro objetivos y ninguno tiene filas reales que lo sostengan. La
+          ausencia es el resultado real del estado actual de la base.
+        </p>
+      </mat-card>
+    }
+
+    @for (group of visibleGroups(); track group.objective) {
+      <mat-card class="group-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">folder_open</mat-icon>
+          <div class="header-content">
+            <mat-card-title>
+              {{ group.objective }} · {{ objectiveLabels[group.objective] }}
+            </mat-card-title>
+            <mat-card-subtitle>{{ group.count }} elementos derivados</mat-card-subtitle>
+          </div>
+          <span
+            [class]="'declaration-chip ' + (group.declaration === 'CON_EVIDENCIA' ? 'con-evidencia' : 'sin-evidencia')"
+          >
+            {{ group.declaration }}
+          </span>
+        </mat-card-header>
+
+        <mat-card-content>
+          @if (group.empty) {
+            <div class="empty-declaration">
+              <mat-icon>block</mat-icon>
+              <div>
+                <strong>SIN_EVIDENCIA</strong>
+                <p>
+                  El objetivo {{ group.objective }} no tiene evidencia derivada en este momento. La
+                  API lo declara vacío de forma explícita; no se muestra una lista vacía muda ni se
+                  rellena con datos de ejemplo.
+                </p>
+              </div>
+            </div>
+          } @else {
+            <div class="evidence-list">
+              @for (item of group.items; track $index; let i = $index) {
+                <div class="evidence-item">
+                  <div class="evidence-head">
+                    <span class="module-badge">{{ item.module }}</span>
+                    <span class="kind-badge">{{ item.kind }}</span>
+                    <code class="reference">{{ item.reference }}</code>
+                    <span class="evidence-date">{{ dateLabel(item) }}</span>
+                    <span class="synthetic-note">{{ syntheticLabel(item) }}</span>
+                  </div>
+
+                  <p class="evidence-desc">{{ item.description }}</p>
+
+                  <button
+                    mat-button
+                    type="button"
+                    class="origin-toggle"
+                    (click)="toggleSource(group, i)"
+                    [attr.aria-expanded]="isExpanded(group, i)"
+                  >
+                    <mat-icon>{{ isExpanded(group, i) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                    {{ isExpanded(group, i) ? 'Ocultar origen' : 'Ver origen del dato' }}
+                  </button>
+
+                  @if (isExpanded(group, i)) {
+                    @if (isUndeclared(item)) {
+                      <div class="undeclared-banner">
+                        <mat-icon>help_outline</mat-icon>
+                        <span>
+                          Origen no declarado (<code>undeclared</code>): la fuente no pudo declarar
+                          la operación que produjo este elemento, así que no es verificable con la
+                          evidencia disponible.
+                        </span>
+                      </div>
+                    } @else {
+                      <p class="origin-caption">
+                        Operación real ejecutada por la API (consulta y resultado), devuelta tal
+                        cual:
+                      </p>
+                      <pre class="origin-text">{{ item.source }}</pre>
+                    }
+                  }
+                </div>
+              }
+            </div>
+          }
+        </mat-card-content>
+      </mat-card>
+    }
+  }
+
+  <p class="page-footnote">
+    La evidencia no se persiste en una tabla propia: se deriva en cada consulta de las filas reales
+    de M2..M8. Un elemento sin origen verificable queda declarado como
+    <code>undeclared</code>, nunca oculto.
+  </p>
+</section>

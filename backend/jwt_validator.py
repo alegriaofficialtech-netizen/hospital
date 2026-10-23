@@ -132,7 +132,7 @@ CLINICAL_ACTIONS = frozenset({"CREATE_ORDER", "VALIDATE_ORDER", "VIEW_ORDERS"})
 
 # Acciones que solo puede ejecutar una persona con MFA acreditada. Una cuenta
 # de servicio queda excluida igual que en las acciones clinicas.
-HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS", "MANAGE_RISKS", "MANAGE_CONTROLS", "MANAGE_INCIDENTS", "ACK_ALERTS"})
+HUMAN_ONLY_ACTIONS = frozenset({"MANAGE_IDENTITIES", "RUN_DIAGNOSTICS", "MANAGE_ASSETS", "MANAGE_RISKS", "MANAGE_CONTROLS", "MANAGE_INCIDENTS", "ACK_ALERTS", "MANAGE_INSTRUMENTS", "SUBMIT_VALIDATION", "GENERATE_REPORTS"})
 
 CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "CREATE_ORDER": {
@@ -257,6 +257,75 @@ CLINICAL_PERMISSIONS: Dict[str, Dict[str, Any]] = {
             "Consulta del panel de indicadores M8. Es el panel de lectura: lo ve "
             "cualquier identidad autenticada; no expone datos clinicos ni permite "
             "escritura, por lo que no exige MFA ni rol de gestion."
+        ),
+    },
+
+    "VIEW_INSTRUMENTS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": (
+            "Consulta de instrumentos de validacion y sus items (M9). Minimo "
+            "privilegio: solo el Oficial de Seguridad y el Administrador de "
+            "plataforma ven la herramienta de medida; el resto de roles no la "
+            "necesita para operar."
+        ),
+    },
+    "MANAGE_INSTRUMENTS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": (
+            "Alta de instrumentos de validacion (M9). Minimo privilegio: solo el "
+            "Administrador de plataforma, con MFA acreditada, y en "
+            "HUMAN_ONLY_ACTIONS: una cuenta de servicio nunca define el "
+            "instrumento con el que se evalua el modelo."
+        ),
+    },
+    "VIEW_VALIDATIONS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": (
+            "Consulta de dictamenes de expertos registrados (M9). Minimo "
+            "privilegio: el dictamen es evidencia de tesis y solo lo leen el "
+            "Oficial de Seguridad y el Administrador de plataforma."
+        ),
+    },
+    "SUBMIT_VALIDATION": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": (
+            "Registro de un dictamen de experto (M9). Minimo privilegio: solo el "
+            "Administrador de plataforma, con MFA acreditada, y en "
+            "HUMAN_ONLY_ACTIONS. Registrar un dictamen es un acto humano con "
+            "responsabilidad: el sistema no lo genera ni lo deriva."
+        ),
+    },
+    "VIEW_EVIDENCE": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": (
+            "Consulta del inventario de evidencia por objetivo (O1..O4). Minimo "
+            "privilegio: la evidencia agregada expone hallazgos, riesgos, "
+            "controles e incidentes, por lo que solo la ven auditoria y "
+            "administracion."
+        ),
+    },
+    "VIEW_REPORTS": {
+        "required_roles": {"ROLE_SECURITY_AUDITOR", "ROLE_PLATFORM_ADMIN"},
+        "require_mfa": False,
+        "description": (
+            "Consulta de informes generados. Minimo privilegio: el informe "
+            "consolida la evidencia de todos los modulos; solo lo leen el "
+            "Oficial de Seguridad y el Administrador de plataforma."
+        ),
+    },
+    "GENERATE_REPORTS": {
+        "required_roles": {"ROLE_PLATFORM_ADMIN"},
+        "require_mfa": True,
+        "description": (
+            "Generacion de un informe desde datos reales. Minimo privilegio: "
+            "solo el Administrador de plataforma, con MFA acreditada, y en "
+            "HUMAN_ONLY_ACTIONS: emitir un informe es un acto humano que asume "
+            "lo que la base declara y lo que declara ausente."
         ),
     },
 

@@ -64,7 +64,7 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | F2 | M2 Diagnostico + M3 Inventario: comprobadores reales y catalogo de activos | **cerrada** |
 | F3 | M4 Matriz de riesgos + M5 Controles, derivados de lo que M2 y M3 hayan encontrado | **cerrada** |
 | F4 | M6 Incidentes + M8 Indicadores sobre datos reales de la plataforma | **cerrada** |
-| F5 | M9 Validacion por expertos y consolidacion de la evidencia por objetivo | pendiente |
+| F5 | M9 Validacion por expertos y consolidacion de la evidencia por objetivo | **cerrada** |
 
 ## 5. Matriz de trazabilidad: modulo, objetivo, evidencia
 
@@ -79,7 +79,7 @@ La plataforma cubre los cuatro objetivos de la tesis:
 | M6 | | | | x | Incidentes con severidad, ciclo de vida validado por maquina de estados, historial inmutable de transiciones, vinculos a activo/riesgo/control y auditoria atomica; alertas derivadas del estado real con evidencia ejecutable y acuse trazable | real, verificado (F4) |
 | M7 | | | x | x | Cadena de hash verificada y su checkpoint | real, verificado |
 | M8 | | | | x | Ocho indicadores calculados sobre datos reales, cada uno con la operacion que lo produce en su campo `source`; ningun valor es una constante y el centinela `undeclared` declara lo que no puede probarse | real, verificado (F4) |
-| M9 | | | | x | Dictamenes de terceros con autor, fecha y alcance; generados por la plataforma: ninguno | pendiente |
+| M9 | | | | x | Dictamenes de terceros con autor, rol, afiliacion, fecha, alcance, veredicto **declarado por el experto** y respuestas por item sobre un instrumento versionado. La puntuacion es una media ponderada **descriptiva** y no decide el veredicto. La plataforma no genera, no corrige y no sugiere dictamenes: en el estado actual hay **cero dictamenes reales** y solo un fixture sintetico de la suite, marcado `SINT` | real, verificado (F5) |
 
 ## 6. Lo que ya esta resuelto y sirve de base
 
@@ -421,3 +421,75 @@ F4 queda implementada y verificada sobre la rama `feat/f11-f3-risks-controls`, c
 - Los acuses sobreviven aunque la regla deje de aplicar; es intencional (trazabilidad de la respuesta), pero no hay purga.
 - `dashboard.component.spec.ts` (prueba unitaria de Angular) no se actualizo: el panel ahora dispara tres consultas mas y el spec no las espera. No es ejecutable en `servidor-1` (no hay Node) y no forma parte de la suite de API.
 - El interceptor de modo demo no tiene manejadores para las tres rutas nuevas; en `local-real`, que es el modo desplegado, no aplica.
+
+## Cierre de F5: M9 validacion por expertos, instrumentos, evidencias e informes (2026-10-22)
+
+F5 queda implementada y verificada sobre la rama `feat/f11-f3-risks-controls`, cubriendo el Objetivo O4 en su parte de validacion externa y consolidacion documental.
+
+### Que hace F5
+
+**Instrumentos de validacion** (herramienta, no evaluacion):
+- `validation_instruments` + `instrument_items`: instrumento versionado con escala, estado y items agrupados por las **seis dimensiones del modelo Zero Trust** (identidad, dispositivo, red, aplicacion, datos y monitoreo).
+- Sembrado `INSTR-F11-ZTA-01` v1.0, `ACTIVO`, escala 1..5, con **14 items** verificables (identidad 3, dispositivo 2, red 2, aplicacion 2, datos 2, monitoreo 3). Un instrumento no contiene ninguna evaluacion: es la vara de medir.
+- Endpoints: `GET /api/v1/instruments`, `POST /api/v1/instruments`, `GET /api/v1/instruments/{id}`.
+
+**M9 Dictamenes de expertos**:
+- `expert_reviews` + `expert_review_answers`: se registra lo que el experto declara (nombre, rol, afiliacion, alcance, **veredicto**, observaciones y una respuesta por item).
+- El **veredicto lo declara el experto**. El sistema solo calcula una **media ponderada descriptiva** (`score`) que se rotula como tal en la interfaz; no la usa para asignar, corregir ni sugerir el veredicto. Dos dictamenes con las mismas respuestas y veredictos distintos se conservan tal cual.
+- **La plataforma no genera dictamenes.** En el estado actual hay **cero dictamenes reales**; el unico registro existente es un fixture de la suite (`EXPERTO-SINTETICO-F11`, afiliacion "ninguna (sintetica)", `synthetic = 1`), visible y marcado `SINT` en la pantalla.
+- Endpoints: `GET /api/v1/validations`, `POST /api/v1/validations`, `GET /api/v1/validations/{id}`.
+
+**Registro de evidencias por objetivo** (derivado, no persistido):
+- `GET /api/v1/evidence` agrupa la evidencia **real** por objetivo: O1 hallazgos de M2, O2 riesgos y evaluaciones de activos de M3/M4, O3 controles con su evidencia de M5, O4 incidentes, auditoria e indicadores de M6/M7/M8.
+- Cada elemento declara `reference` (el id o codigo real) y `source` (la operacion que lo produce, o `undeclared`). Si una fuente desaparece, su evidencia desaparece con ella: el inventario no se puede inflar a mano.
+- Estado actual: **749 elementos** (O1 594, O2 42, O3 61, O4 52).
+
+**Informes** (generados solo desde datos reales):
+- `reports` guarda el Markdown generado, su `content_hash` (sha256) y un codigo determinista `RPT-<objetivo>-<hash corto>`: mismo contenido y mismo periodo dan el mismo codigo.
+- Secciones obligatorias: metricas reales, **datos sinteticos** (cuantos registros lo son), **limitaciones** (lo que no existe o no puede probarse) y referencias de evidencia.
+- Si no hay dictamenes, el informe **lo dice**; no rellena el hueco. Prohibido el texto inventado: todo lo que afirma el informe sale de una fila.
+- Endpoints: `GET /api/v1/reports`, `POST /api/v1/reports`, `GET /api/v1/reports/{id}`.
+
+### Permisos (minimo privilegio)
+
+| Ruta | Accion | Roles | MFA |
+|---|---|---|---|
+| `GET /api/v1/instruments`, `GET /api/v1/instruments/{id}` | `VIEW_INSTRUMENTS` | auditor, admin | no |
+| `POST /api/v1/instruments` | `MANAGE_INSTRUMENTS` | admin | **si** (humano) |
+| `GET /api/v1/validations`, `GET /api/v1/validations/{id}` | `VIEW_VALIDATIONS` | auditor, admin | no |
+| `POST /api/v1/validations` | `SUBMIT_VALIDATION` | admin | **si** (humano) |
+| `GET /api/v1/evidence` | `VIEW_EVIDENCE` | auditor, admin | no |
+| `GET /api/v1/reports`, `GET /api/v1/reports/{id}` | `VIEW_REPORTS` | auditor, admin | no |
+| `POST /api/v1/reports` | `GENERATE_REPORTS` | admin | **si** (humano) |
+
+`MANAGE_INSTRUMENTS`, `SUBMIT_VALIDATION` y `GENERATE_REPORTS` estan en `HUMAN_ONLY_ACTIONS`: registrar un dictamen es un acto humano con responsabilidad y ninguna cuenta de servicio puede firmarlo.
+
+### Verificacion
+
+- **166/166 pruebas de API aprobadas** (127 previas + 39 de F5: 25 de dominio sobre base temporal y 14 contra la pila real).
+- **Migracion 9 aplicada**: `validation_instruments`, `instrument_items`, `expert_reviews`, `expert_review_answers` y `reports`, todas aditivas e idempotentes.
+- **Dominio en base temporal**: siembra de un instrumento con 14 items y **sin dictamenes**; re-siembra sin duplicar; codigo repetido, instrumento sin items y escala incoherente rechazados; dictamen con instrumento inexistente o item ajeno rechazado; respuesta fuera de escala rechazada; item duplicado rechazado; `score` igual a la media ponderada; **dos dictamenes con las mismas respuestas y veredictos distintos se guardan sin correccion** (el sistema no deriva el veredicto); `synthetic` forzado; rollback total si falla la auditoria.
+- **Evidencias e informes**: cada elemento con `reference` y `source`; un objetivo sin datos se declara vacio; el filtro por objetivo aisla; el informe trae las cuatro secciones obligatorias; el hash es estable para el mismo contenido y periodo; un informe sin dictamenes lo declara; los conteos del informe coinciden con la API.
+- **API contra la pila real**: RBAC de los cinco roles en las cuatro areas; el auditor lee y no crea, no registra y no genera; el admin sin MFA recibe 403; el admin con MFA registra un dictamen **sintetico** y genera un informe; 404 y validaciones; un rol clinico sin permiso recibe 403.
+- **Verificacion en navegador real** (capturas `shots-f5`, series 40 a 49), **34 de 34 comprobaciones en verde**: instrumento con su version, escala y 14 items en 6 dimensiones; pantalla de validacion que declara "El veredicto lo declara el experto, no el sistema" y "Puntuacion descriptiva (no decide el veredicto)"; formulario con dos selectores (instrumento y veredicto) y sin veredicto preseleccionado; fixtures sinteticos marcados `SINT`; evidencias O1..O4 con recuento, referencia y origen desplegable (749 elementos); informe mostrado integro (16938 caracteres) con metricas, datos sinteticos, limitaciones y referencias; y el auditor leyendo las cuatro pantallas sin poder crear, registrar ni generar.
+
+### Limitaciones de F5
+
+- **No hay dictamenes reales y no se invento ninguno.** La validacion por expertos queda formalmente instrumentada, pero el capitulo de validacion de la tesis sigue pendiente de un experto humano real. Es la limitacion mas importante de la entrega y se declara como tal en los propios informes.
+- El unico dictamen existente es el fixture sintetico de la suite (`EVL-API-5480072`), y el segundo instrumento (`INSTR-API-*`) tambien lo creo la suite. Un despliegue de demostracion conviene re-sembrar la base, igual que en F2, F3 y F4.
+- Los informes son **instantaneas** inmutables: no se regeneran ni se purgan. Es intencional (integridad y trazabilidad), pero no hay politica de retencion.
+- `GET /api/v1/evidence` devuelve el inventario completo sin paginacion: hoy son 749 elementos y la pantalla los agrupa por objetivo, pero con una base mucho mayor haria falta paginar.
+- `dashboard.component.spec.ts` sigue sin actualizarse y el interceptor de modo demo no cubre las rutas nuevas. Ninguno de los dos afecta al modo desplegado (`local-real`) ni forma parte de la suite de API.
+
+## Alcance ampliado respecto al catalogo original (F4 y F5)
+
+El catalogo de modulos de la seccion 3 (M0 a M9) describe los modulos del sistema. Cuatro piezas construidas en F4 y F5 **no figuraban en ese catalogo** y se documentan aqui de forma explicita para que la trazabilidad no induzca a error:
+
+| Pieza | Fase | Por que existe | Objetivo que sirve |
+|---|---|---|---|
+| Alertas derivadas del estado real | F4 | convertir los hallazgos, riesgos, controles e incidentes en senales accionables sin duplicar el dato ni crear una tabla que se quede obsoleta | O4 |
+| Panel de monitorizacion de seguridad | F4 | dar una vista unica de incidentes abiertos, alertas sin acusar e indicadores en peor estado | O4 |
+| Instrumento de validacion | F5 | hacer reproducible y auditable el juicio del experto: sin instrumento, un dictamen no es comparable | O4 |
+| Registro de evidencias e informes | F5 | consolidar en un solo lugar la evidencia que ya producen M2 a M8 y emitir informes con hash, sin reescribir a mano lo que la plataforma ya demuestra | O1 a O4 |
+
+Ninguna de estas piezas anade una fuente de verdad nueva: las alertas, la evidencia y los informes se **derivan** de lo que ya existe, y el instrumento solo mide. Es la diferencia entre ampliar el alcance y duplicarlo.

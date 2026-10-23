@@ -1,0 +1,510 @@
+<section class="validation-page" aria-label="Validación por expertos M9">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>fact_check</mat-icon>
+        <span>Módulo M9 · Validación por expertos</span>
+      </div>
+      <h1>Validación por expertos (M9)</h1>
+      <p class="subtitle">
+        Dictámenes que expertos humanos emiten sobre el instrumento de medida del modelo Zero
+        Trust. El sistema registra el dictamen; no lo genera ni lo deduce.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (canManage()) {
+        <button mat-flat-button color="primary" (click)="openForm()">
+          <mat-icon>add</mat-icon>
+          Registrar dictamen
+        </button>
+      }
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  <!-- Regla del modulo, visible antes que cualquier dato -->
+  <mat-card class="notice-card">
+    <mat-icon>info_outline</mat-icon>
+    <div>
+      <strong>El veredicto lo declara el experto, no el sistema.</strong>
+      <p>
+        La puntuación que aparece junto a cada dictamen es una media ponderada
+        <em>descriptiva</em> de las respuestas. No decide el veredicto, no lo corrige y no lo
+        sugiere: dos dictámenes con las mismas respuestas y veredictos distintos se conservan tal
+        como los declaró cada experto.
+      </p>
+    </div>
+  </mat-card>
+
+  @if (error()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  @if (instrumentsError()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>
+        No se pudieron cargar los instrumentos para el registro: {{ instrumentsError() }}
+      </span>
+    </div>
+  }
+
+  <!-- Resumen -->
+  <div class="kpi-grid">
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="primary">fact_check</mat-icon>
+        <mat-card-title>Dictámenes registrados</mat-card-title>
+        <mat-card-subtitle>Filas reales de la API</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ reviewedCount() }}</div>
+        <div class="kpi-sub">Ninguno se genera automáticamente</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card kpi-warning">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>rule</mat-icon>
+        <mat-card-title>Cumple parcialmente</mat-card-title>
+        <mat-card-subtitle>Veredicto declarado por el experto</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ partialCount() }}</div>
+        <div class="kpi-sub">CUMPLE_PARCIALMENTE</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card kpi-danger">
+      <mat-card-header>
+        <mat-icon mat-card-avatar>block</mat-icon>
+        <mat-card-title>No cumple</mat-card-title>
+        <mat-card-subtitle>Veredicto declarado por el experto</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ notCompliantCount() }}</div>
+        <div class="kpi-sub">NO_CUMPLE</div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+
+  <!-- Lista de dictamenes -->
+  <mat-card class="table-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar color="primary">table_chart</mat-icon>
+      <mat-card-title>Dictámenes de expertos</mat-card-title>
+      <mat-card-subtitle>{{ validations().length }} registros recuperados de la API</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content class="table-content">
+      @if (loading()) {
+        <div class="loading-shade">
+          <mat-progress-spinner mode="indeterminate" diameter="48"></mat-progress-spinner>
+          <span>Consultando dictámenes...</span>
+        </div>
+      }
+
+      <div class="table-responsive">
+        <table mat-table [dataSource]="validations()" class="mat-elevation-z0">
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef>Código</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="code-badge">{{ r.code }}</span>
+              @if (r.synthetic) {
+                <span class="synthetic-tag" title="Dictamen registrado en entorno de laboratorio">SINT</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="expert">
+            <th mat-header-cell *matHeaderCellDef>Experto</th>
+            <td mat-cell *matCellDef="let r">
+              <div class="expert-name">{{ r.expert_name }}</div>
+              <div class="expert-meta">
+                {{ r.expert_role || 'sin rol declarado' }}
+                @if (r.expert_affiliation) {
+                  · {{ r.expert_affiliation }}
+                }
+              </div>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="scope">
+            <th mat-header-cell *matHeaderCellDef>Alcance</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="scope-cell">{{ r.scope || 'sin alcance declarado' }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="verdict">
+            <th mat-header-cell *matHeaderCellDef>Veredicto</th>
+            <td mat-cell *matCellDef="let r">
+              <span [class]="'verdict-chip ' + verdictClass(r.verdict)">{{ r.verdict }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="reviewed_at">
+            <th mat-header-cell *matHeaderCellDef>Fecha</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="date-cell">{{ r.reviewed_at }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="score">
+            <th mat-header-cell *matHeaderCellDef>Puntuación</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="score-cell" title="Media ponderada descriptiva; no es el veredicto">
+                {{ scoreLabel(r) }}
+              </span>
+              <div class="score-hint">descriptiva</div>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let r">
+              <button mat-icon-button color="primary" (click)="selectReview(r)" title="Ver detalle y respuestas">
+                <mat-icon>visibility</mat-icon>
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr
+            mat-row
+            *matRowDef="let row; columns: displayedColumns"
+            [class.selected-row]="selected()?.id === row.id"
+          ></tr>
+        </table>
+      </div>
+
+      @if (!loading() && validations().length === 0) {
+        <mat-card class="empty-card">
+          <mat-icon>fact_check</mat-icon>
+          <h2>No hay dictámenes de expertos registrados. El sistema registra dictámenes; no los genera.</h2>
+          <p>
+            Esta lista vacía es el estado real de la base: ningún experto ha emitido todavía un
+            dictamen sobre el instrumento. La pantalla no muestra dictámenes de ejemplo.
+          </p>
+        </mat-card>
+      }
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Detalle del dictamen -->
+  @if (selected(); as review) {
+    <div class="detail-section">
+      <mat-card class="detail-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">fact_check</mat-icon>
+          <div class="header-content">
+            <mat-card-title>Dictamen {{ review.code }}</mat-card-title>
+            <mat-card-subtitle>
+              {{ review.expert_name }} · {{ review.expert_role || 'sin rol declarado' }} · instrumento
+              <code>{{ review.instrument_id }}</code> v{{ review.instrument_version }}
+            </mat-card-subtitle>
+          </div>
+          <button mat-icon-button (click)="clearSelection()" class="close-btn" title="Cerrar detalle">
+            <mat-icon>close</mat-icon>
+          </button>
+        </mat-card-header>
+
+        <mat-card-content>
+          <div class="detail-grid">
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Experto</span>
+                <span class="detail-val">{{ review.expert_name }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Rol o cargo declarado</span>
+                <span class="detail-val">{{ review.expert_role || 'sin rol declarado' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Afiliación</span>
+                <span class="detail-val">{{ review.expert_affiliation || 'sin afiliación declarada' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Fecha del dictamen</span>
+                <span class="detail-val">{{ review.reviewed_at }}</span>
+              </div>
+            </div>
+
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Alcance declarado</span>
+                <span class="detail-val">{{ review.scope || 'sin alcance declarado' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Registrado por</span>
+                <span class="detail-val">{{ review.created_by || 'SYSTEM' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Registro en la API</span>
+                <span class="detail-val">{{ toDate(review.created_at) | date: 'medium' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Respuestas</span>
+                <span class="detail-val">{{ review.answers?.length ?? 0 }}</span>
+              </div>
+            </div>
+
+            <!-- Veredicto: declaracion humana, nunca calculo del sistema -->
+            <div class="verdict-block">
+              <div class="verdict-head">
+                <span class="verdict-caption">Veredicto declarado por el experto</span>
+                <span [class]="'verdict-chip verdict-chip-lg ' + verdictClass(review.verdict)">
+                  {{ review.verdict }}
+                </span>
+              </div>
+              <p class="verdict-text">{{ verdictLabel(review.verdict) }}</p>
+
+              <div class="descriptive-score">
+                <span class="score-caption">Puntuación descriptiva (no decide el veredicto)</span>
+                <strong class="score-value">{{ scoreLabel(review) }}</strong>
+                <span class="score-note">
+                  Media ponderada de las respuestas según los pesos del instrumento. Es un dato
+                  auxiliar: el sistema no la usa para asignar ni corregir el veredicto.
+                </span>
+              </div>
+            </div>
+
+            <div class="detail-item">
+              <span class="detail-label">Observaciones del experto</span>
+              <p class="detail-desc">{{ review.observations || 'Sin observaciones registradas.' }}</p>
+            </div>
+          </div>
+
+          <div class="answers-block">
+            <h3>
+              <mat-icon>checklist</mat-icon>
+              Respuestas por ítem y dimensión
+            </h3>
+
+            @if (loadingDetail()) {
+              <div class="mini-loading">
+                <mat-progress-spinner mode="indeterminate" diameter="24"></mat-progress-spinner>
+                <span>Cargando respuestas...</span>
+              </div>
+            } @else if (groupedAnswers(review).length === 0) {
+              <p class="empty-sub">La API no devolvió respuestas para este dictamen.</p>
+            } @else {
+              @for (group of groupedAnswers(review); track group.dimension) {
+                <div class="dimension-block">
+                  <h4>
+                    <mat-icon class="mini-icon">category</mat-icon>
+                    {{ group.label }}
+                    <span class="dimension-code">{{ group.dimension }}</span>
+                    <span class="dimension-count">{{ group.answers.length }} respuestas</span>
+                  </h4>
+
+                  <ul class="answer-list">
+                    @for (answer of group.answers; track answer.id) {
+                      <li class="answer-row">
+                        <div class="answer-head">
+                          <span class="item-code">{{ answer.item_code }}</span>
+                          <span class="answer-score">
+                            {{ answer.score }}
+                            @if (instrumentScale(review); as scale) {
+                              <span class="answer-scale">/ escala {{ scale }}</span>
+                            }
+                          </span>
+                          <span class="answer-weight">peso {{ answer.weight }}</span>
+                        </div>
+                        <p class="item-statement">{{ answer.statement }}</p>
+                        @if (answer.comment) {
+                          <p class="answer-comment">{{ answer.comment }}</p>
+                        } @else {
+                          <p class="answer-comment muted">Sin comentario del experto.</p>
+                        }
+                      </li>
+                    }
+                  </ul>
+                </div>
+              }
+            }
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Registro de dictamen -->
+  @if (showForm()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">record_voice_over</mat-icon>
+          <mat-card-title>Registrar dictamen de experto</mat-card-title>
+          <mat-card-subtitle>
+            Requiere rol administrador de plataforma y segundo factor (MFA) acreditado
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (formError()) {
+            <div class="error-banner" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ formError() }}</span>
+            </div>
+          }
+
+          <div class="form-rule">
+            <mat-icon>info_outline</mat-icon>
+            <span>
+              Usted registra lo que el experto declara. El veredicto lo elige el experto; la
+              puntuación se calcula solo como resumen descriptivo.
+            </span>
+          </div>
+
+          <div class="form-grid">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Instrumento respondido (solo ACTIVO)</mat-label>
+              <mat-select
+                [ngModel]="formInstrumentId"
+                (ngModelChange)="onInstrumentChange($event)"
+                [disabled]="loadingItems() || activeInstruments().length === 0"
+              >
+                @for (instrument of activeInstruments(); track instrument.id) {
+                  <mat-option [value]="instrument.id">
+                    {{ instrument.code }} · {{ instrument.name }} (v{{ instrument.version }})
+                  </mat-option>
+                }
+              </mat-select>
+              @if (activeInstruments().length === 0) {
+                <mat-hint>
+                  No hay instrumentos ACTIVO: la API rechaza dictámenes sobre instrumentos en
+                  BORRADOR o ARCHIVADO.
+                </mat-hint>
+              }
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Nombre del experto</mat-label>
+              <input matInput [(ngModel)]="formExpertName" placeholder="Nombre y apellidos" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Rol o cargo del experto</mat-label>
+              <input matInput [(ngModel)]="formExpertRole" placeholder="Ej: Auditor externo ISO 27001">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Afiliación</mat-label>
+              <input matInput [(ngModel)]="formExpertAffiliation" placeholder="Organización del experto">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Fecha del dictamen</mat-label>
+              <input matInput type="date" [(ngModel)]="formReviewedAt">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Alcance declarado</mat-label>
+              <input matInput [(ngModel)]="formScope" placeholder="Qué evaluó el experto">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Veredicto declarado por el experto</mat-label>
+              <mat-select [ngModel]="formVerdict" (ngModelChange)="formVerdict = $event">
+                @for (verdict of verdicts; track verdict) {
+                  <mat-option [value]="verdict">{{ verdict }} · {{ verdictLabels[verdict] }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Observaciones del experto</mat-label>
+              <textarea matInput [(ngModel)]="formObservations" rows="3"></textarea>
+            </mat-form-field>
+          </div>
+
+          @if (loadingItems()) {
+            <div class="mini-loading">
+              <mat-progress-spinner mode="indeterminate" diameter="24"></mat-progress-spinner>
+              <span>Cargando items del instrumento...</span>
+            </div>
+          }
+
+          @if (answers().length > 0) {
+            <div class="answers-form">
+              <div class="answers-form-head">
+                <h3>
+                  Respuestas por ítem ({{ answeredCount() }} de {{ answers().length }})
+                </h3>
+                <span class="scale-tag">Escala {{ scaleLabel() }}</span>
+              </div>
+
+              <div class="descriptive-preview">
+                <span class="score-caption">Puntuación descriptiva (vista previa)</span>
+                <strong class="score-value">
+                  {{ previewScore() === null ? 'sin respuestas' : previewScore() }}
+                </strong>
+                <span class="score-note">
+                  Calculada en el navegador con la misma media ponderada; la API la recalcula al
+                  registrar. No es el veredicto ni lo sugiere.
+                </span>
+              </div>
+
+              @for (answer of answers(); track answer.itemId; let i = $index) {
+                <div class="answer-form-row">
+                  <div class="answer-form-head">
+                    <span class="item-code">{{ answer.itemCode }}</span>
+                    <span class="dimension-tag">{{ answer.dimension }}</span>
+                    <span class="answer-weight">peso {{ answer.weight }}</span>
+                  </div>
+                  <p class="item-statement">{{ answer.statement }}</p>
+                  <div class="answer-form-inputs">
+                    <mat-form-field appearance="outline" class="score-field">
+                      <mat-label>Respuesta</mat-label>
+                      <input
+                        matInput
+                        type="number"
+                        step="1"
+                        [ngModel]="answer.score"
+                        (ngModelChange)="patchAnswer(i, { score: $event })"
+                      >
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="comment-field">
+                      <mat-label>Comentario (opcional)</mat-label>
+                      <input
+                        matInput
+                        [ngModel]="answer.comment"
+                        (ngModelChange)="patchAnswer(i, { comment: $event })"
+                      >
+                    </mat-form-field>
+                  </div>
+                </div>
+              }
+            </div>
+          }
+
+          <p class="form-note">
+            La marca de dictamen sintético la impone el servidor. El código del dictamen también lo
+            deriva el servidor si no se declara.
+          </p>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelForm()" [disabled]="saving()">Cancelar</button>
+          <button mat-flat-button color="primary" (click)="saveValidation()" [disabled]="saving()">
+            @if (saving()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Registrar dictamen
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+</section>

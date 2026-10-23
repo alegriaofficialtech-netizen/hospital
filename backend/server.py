@@ -45,13 +45,21 @@ from database import (
     DatabaseBackedOrdersDict,
     DatabaseError,
     DuplicateOrderError,
+    ExpertReviewAlreadyExistsError,
+    ExpertReviewNotFoundError,
+    ExpertReviewValidationError,
     F11_ENVIRONMENT,
     IncidentAlreadyExistsError,
     IncidentNotFoundError,
     IncidentTransitionError,
     IncidentValidationError,
+    InstrumentAlreadyExistsError,
+    InstrumentNotFoundError,
+    InstrumentValidationError,
     IomtReplayError,
     OrderVersionConflictError,
+    ReportNotFoundError,
+    ReportValidationError,
 )
 from asset_inventory import (
     classifications,
@@ -87,6 +95,22 @@ from alert_management import (
     acknowledge_alert,
     list_alerts,
     list_indicators,
+)
+from validation_management import (
+    create_instrument,
+    get_expert_review,
+    get_instrument,
+    list_expert_reviews,
+    list_instruments,
+    seed_validation_instrument,
+    submit_expert_review,
+    validate_instrument,
+)
+from report_management import (
+    derive_evidence,
+    generate_report,
+    get_report,
+    list_reports,
 )
 
 from clinical_domain import (
@@ -257,6 +281,22 @@ try:
     )
 except Exception as e:
     print("[FATAL] No se pudieron sembrar los incidentes de laboratorio F4: %s" % e, file=sys.stderr)
+    raise
+
+# M9 Validacion: se siembra UN instrumento de validacion (herramienta de
+# medida) de forma idempotente y auditada. NO se siembra ningun dictamen: el
+# sistema registra lo que declara un experto humano, nunca lo inventa.
+try:
+    VALIDATION_SEED_RESULT = seed_validation_instrument(db_manager)
+    print(
+        "[*] Instrumento de validacion F11: %d creados, %d existentes"
+        % (
+            len(VALIDATION_SEED_RESULT.get("created", [])),
+            len(VALIDATION_SEED_RESULT.get("skipped", [])),
+        )
+    )
+except Exception as e:
+    print("[FATAL] No se pudo sembrar el instrumento de validacion F5: %s" % e, file=sys.stderr)
     raise
 
 
@@ -727,6 +767,43 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v1/indicators":
             self._handle_indicators_get(client_ip)
             return
+
+        # 11. Instrumentos de validacion y dictamenes de expertos (M9 / F5)
+        if parsed.path == "/api/v1/instruments":
+            self._handle_instruments_get(client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/instruments/"):
+            instrument_id = parsed.path[len("/api/v1/instruments/"):].strip("/")
+            if instrument_id:
+                self._handle_instrument_get(instrument_id, client_ip)
+                return
+
+        if parsed.path == "/api/v1/validations":
+            self._handle_validations_get(client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/validations/"):
+            review_id = parsed.path[len("/api/v1/validations/"):].strip("/")
+            if review_id:
+                self._handle_validation_get(review_id, client_ip)
+                return
+
+        # 12. Inventario de evidencia por objetivo, derivado de datos reales
+        if parsed.path == "/api/v1/evidence":
+            self._handle_evidence_get(parsed.query, client_ip)
+            return
+
+        # 13. Informes generados desde datos reales
+        if parsed.path == "/api/v1/reports":
+            self._handle_reports_get(client_ip)
+            return
+
+        if parsed.path.startswith("/api/v1/reports/"):
+            report_id = parsed.path[len("/api/v1/reports/"):].strip("/")
+            if report_id:
+                self._handle_report_get(report_id, client_ip)
+                return
 
         self.send_json(404, {"error": "NotFound", "message": "Ruta no encontrada"})
 
@@ -2433,6 +2510,371 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
         })
 
 
+    # --------------------------------------------------------------------------
+    # Handlers para M9: instrumentos de validacion, dictamenes e informes (F5)
+    # --------------------------------------------------------------------------
+    def _handle_instruments_get(self, client_ip: str) -> None:
+        """Lista los instrumentos de validacion registrados (herramientas, no evaluaciones)."""
+        context, failure = self._authorize_policy(
+            "VIEW_INSTRUMENTS", "LIST_INSTRUMENTS", client_ip,
+            "El acceso a los instrumentos de validacion esta restringido al Oficial "
+            "de Seguridad y al Administrador de plataforma",
+            "INSTRUMENTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        instruments = list_instruments(db_manager)
+        record_audit_event(
+            "LIST_INSTRUMENTS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(instruments)} instrumentos de validacion",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "instruments": instruments,
+            "count": len(instruments),
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_instrument_get(self, instrument_id: str, client_ip: str) -> None:
+        """Detalle de un instrumento con sus items."""
+        context, failure = self._authorize_policy(
+            "VIEW_INSTRUMENTS", "GET_INSTRUMENT", client_ip,
+            "El acceso al instrumento de validacion esta restringido a roles autorizados",
+            "INSTRUMENTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        instrument = get_instrument(db_manager, instrument_id)
+        if instrument is None:
+            record_audit_event(
+                "GET_INSTRUMENT", context.username, str(list(context.roles)),
+                "DENIED_NOT_FOUND",
+                f"Instrumento {instrument_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": f"El instrumento de validacion '{instrument_id}' no existe",
+                "code": "INSTRUMENT_NOT_FOUND",
+            })
+            return
+        record_audit_event(
+            "GET_INSTRUMENT", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta del instrumento {instrument['code']} v{instrument['version']} "
+            f"con {len(instrument.get('items') or [])} items",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"instrument": instrument, "environment": F11_ENVIRONMENT})
+
+    def _handle_instrument_create_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        """Alta de un instrumento de validacion (herramienta de medida)."""
+        context, failure = self._authorize_policy(
+            "MANAGE_INSTRUMENTS", "INSTRUMENT_CREATE", client_ip,
+            "El alta de instrumentos de validacion exige administrador de "
+            "plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "INSTRUMENT_CREATE", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                "Alta de instrumento rechazada: cuerpo no es objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        # La sinteticidad se impone en el servidor: la declaracion del cliente
+        # no decide la naturaleza del instrumento.
+        payload = {**payload, "synthetic": 1}
+        errors = validate_instrument(payload)
+        if errors:
+            record_audit_event(
+                "INSTRUMENT_CREATE", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                "Alta de instrumento rechazada por validacion: " + ", ".join(sorted(errors)),
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest",
+                "message": "Datos de instrumento de validacion invalidos",
+                "code": "INSTRUMENT_INVALID",
+                "fields": _fields_from_errors(errors),
+            })
+            return
+
+        try:
+            instrument = create_instrument(
+                db_manager, payload, context.username, role=str(list(context.roles))
+            )
+        except InstrumentAlreadyExistsError as e:
+            record_audit_event(
+                "INSTRUMENT_CREATE", context.username, str(list(context.roles)),
+                "DENIED_CONFLICT",
+                f"Instrumento {payload.get('code')} ya existe", client_ip, context.mfa_verified,
+            )
+            self.send_json(409, {
+                "error": "Conflict", "message": str(e),
+                "code": "INSTRUMENT_ALREADY_EXISTS",
+            })
+            return
+        except InstrumentValidationError as e:
+            record_audit_event(
+                "INSTRUMENT_CREATE", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                f"Alta de instrumento rechazada: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest", "message": str(e), "code": "INSTRUMENT_INVALID",
+            })
+            return
+        self.send_json(201, {"instrument": instrument, "environment": F11_ENVIRONMENT})
+
+    def _handle_validations_get(self, client_ip: str) -> None:
+        """Lista los dictamenes de expertos registrados."""
+        context, failure = self._authorize_policy(
+            "VIEW_VALIDATIONS", "LIST_VALIDATIONS", client_ip,
+            "El acceso a los dictamenes de expertos esta restringido al Oficial de "
+            "Seguridad y al Administrador de plataforma",
+            "VALIDATIONS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        reviews = list_expert_reviews(db_manager)
+        record_audit_event(
+            "LIST_VALIDATIONS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(reviews)} dictamenes de expertos",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "validations": reviews,
+            "count": len(reviews),
+            "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_validation_get(self, review_id: str, client_ip: str) -> None:
+        """Detalle de un dictamen con sus respuestas."""
+        context, failure = self._authorize_policy(
+            "VIEW_VALIDATIONS", "GET_VALIDATION", client_ip,
+            "El acceso al dictamen esta restringido a roles autorizados",
+            "VALIDATIONS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        review = get_expert_review(db_manager, review_id)
+        if review is None:
+            record_audit_event(
+                "GET_VALIDATION", context.username, str(list(context.roles)),
+                "DENIED_NOT_FOUND",
+                f"Dictamen {review_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": f"El dictamen de experto '{review_id}' no existe",
+                "code": "VALIDATION_NOT_FOUND",
+            })
+            return
+        record_audit_event(
+            "GET_VALIDATION", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta del dictamen {review['code']} ({review['verdict']})",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"validation": review, "environment": F11_ENVIRONMENT})
+
+    def _handle_validation_submit_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        """Registra el dictamen que declara un experto humano (no lo genera el sistema)."""
+        context, failure = self._authorize_policy(
+            "SUBMIT_VALIDATION", "VALIDATION_SUBMIT", client_ip,
+            "El registro de un dictamen de experto exige administrador de "
+            "plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "VALIDATION_SUBMIT", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                "Registro de dictamen rechazado: cuerpo no es objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        # La sinteticidad del dictamen se impone en el servidor.
+        payload = {**payload, "synthetic": 1}
+        try:
+            review = submit_expert_review(
+                db_manager, payload, context.username, role=str(list(context.roles))
+            )
+        except InstrumentNotFoundError as e:
+            record_audit_event(
+                "VALIDATION_SUBMIT", context.username, str(list(context.roles)),
+                "DENIED_NOT_FOUND",
+                f"Dictamen rechazado: instrumento inexistente ({e})",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound", "message": str(e), "code": "INSTRUMENT_NOT_FOUND",
+            })
+            return
+        except ExpertReviewAlreadyExistsError as e:
+            record_audit_event(
+                "VALIDATION_SUBMIT", context.username, str(list(context.roles)),
+                "DENIED_CONFLICT",
+                f"Dictamen duplicado: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(409, {
+                "error": "Conflict", "message": str(e),
+                "code": "VALIDATION_ALREADY_EXISTS",
+            })
+            return
+        except ExpertReviewValidationError as e:
+            record_audit_event(
+                "VALIDATION_SUBMIT", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                f"Registro de dictamen rechazado: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest", "message": str(e), "code": "VALIDATION_INVALID",
+            })
+            return
+        self.send_json(201, {"validation": review, "environment": F11_ENVIRONMENT})
+
+    def _handle_evidence_get(self, query: str, client_ip: str) -> None:
+        """Inventario de evidencia por objetivo, derivado de datos reales."""
+        context, failure = self._authorize_policy(
+            "VIEW_EVIDENCE", "LIST_EVIDENCE", client_ip,
+            "El inventario de evidencia esta restringido al Oficial de Seguridad y "
+            "al Administrador de plataforma",
+            "EVIDENCE_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        params = parse_qs(query or "")
+        objective = (params.get("objective") or [None])[0]
+        try:
+            evidence = derive_evidence(db_manager, objective)
+        except ReportValidationError as e:
+            record_audit_event(
+                "LIST_EVIDENCE", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                f"Filtro de evidencia invalido: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest", "message": str(e),
+                "code": "EVIDENCE_OBJECTIVE_INVALID",
+            })
+            return
+        record_audit_event(
+            "LIST_EVIDENCE", context.username, str(list(context.roles)), "ALLOWED",
+            "Consulta de %d elementos de evidencia%s"
+            % (evidence["total"], f" para {objective}" if objective else ""),
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, evidence)
+
+    def _handle_reports_get(self, client_ip: str) -> None:
+        """Lista los informes generados (sin contenido)."""
+        context, failure = self._authorize_policy(
+            "VIEW_REPORTS", "LIST_REPORTS", client_ip,
+            "El acceso a los informes esta restringido al Oficial de Seguridad y al "
+            "Administrador de plataforma",
+            "REPORTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        reports = list_reports(db_manager)
+        record_audit_event(
+            "LIST_REPORTS", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta de {len(reports)} informes", client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {
+            "reports": reports, "count": len(reports), "environment": F11_ENVIRONMENT,
+        })
+
+    def _handle_report_get(self, report_id: str, client_ip: str) -> None:
+        """Detalle de un informe con su contenido Markdown integro."""
+        context, failure = self._authorize_policy(
+            "VIEW_REPORTS", "GET_REPORT", client_ip,
+            "El acceso al informe esta restringido a roles autorizados",
+            "REPORTS_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+        report = get_report(db_manager, report_id)
+        if report is None:
+            record_audit_event(
+                "GET_REPORT", context.username, str(list(context.roles)),
+                "DENIED_NOT_FOUND",
+                f"Informe {report_id} no encontrado", client_ip, context.mfa_verified,
+            )
+            self.send_json(404, {
+                "error": "NotFound",
+                "message": f"El informe '{report_id}' no existe",
+                "code": "REPORT_NOT_FOUND",
+            })
+            return
+        record_audit_event(
+            "GET_REPORT", context.username, str(list(context.roles)), "ALLOWED",
+            f"Consulta del informe {report['code']} (hash {report['content_hash']})",
+            client_ip, context.mfa_verified,
+        )
+        self.send_json(200, {"report": report, "environment": F11_ENVIRONMENT})
+
+    def _handle_report_generate_post(self, payload: Dict[str, Any], client_ip: str) -> None:
+        """Genera un informe Markdown exclusivamente con datos reales de la base."""
+        context, failure = self._authorize_policy(
+            "GENERATE_REPORTS", "REPORT_GENERATE", client_ip,
+            "La generacion de informes exige administrador de plataforma y MFA verificado",
+            "PLATFORM_ADMIN_ROLE_REQUIRED",
+        )
+        if failure is not None:
+            self.send_json(failure[0], failure[1])
+            return
+
+        invalid_body = self._json_object_error(payload)
+        if invalid_body is not None:
+            record_audit_event(
+                "REPORT_GENERATE", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                "Generacion de informe rechazada: cuerpo no es objeto JSON",
+                client_ip, context.mfa_verified,
+            )
+            self.send_json(400, invalid_body)
+            return
+
+        try:
+            report = generate_report(
+                db_manager, payload, context.username, role=str(list(context.roles))
+            )
+        except ReportValidationError as e:
+            record_audit_event(
+                "REPORT_GENERATE", context.username, str(list(context.roles)),
+                "DENIED_INVALID",
+                f"Generacion de informe rechazada: {e}", client_ip, context.mfa_verified,
+            )
+            self.send_json(400, {
+                "error": "BadRequest", "message": str(e), "code": "REPORT_INVALID",
+            })
+            return
+        self.send_json(201, {"report": report, "environment": F11_ENVIRONMENT})
+
+
     def do_POST(self) -> None:
         try:
             self._do_POST_internal()
@@ -2675,6 +3117,20 @@ class ZeroTrustRequestHandler(BaseHTTPRequestHandler):
             if len(parts) == 2 and parts[1] == "ack":
                 self._handle_alert_ack_post(parts[0], f2_payload, client_ip)
                 return
+
+        # 1.h Instrumentos de validacion y dictamenes de expertos (M9 / F5)
+        if parsed.path == "/api/v1/instruments":
+            self._handle_instrument_create_post(f2_payload, client_ip)
+            return
+
+        if parsed.path == "/api/v1/validations":
+            self._handle_validation_submit_post(f2_payload, client_ip)
+            return
+
+        # 1.i Informes generados desde datos reales (F5)
+        if parsed.path == "/api/v1/reports":
+            self._handle_report_generate_post(f2_payload, client_ip)
+            return
 
         if parsed.path == "/api/v1/auth/login":
             if not ENABLE_LEGACY_AUTH:

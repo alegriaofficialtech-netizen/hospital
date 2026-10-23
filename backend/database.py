@@ -23,8 +23,26 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 ZERO_HASH = "0" * 64
+
+# Vocabulario cerrado de M9 (validacion por expertos) y de los informes. Vive
+# en la capa de persistencia porque es la capa inferior: la API y el modulo de
+# dominio lo reutilizan en lugar de duplicarlo, de modo que ningun escritor
+# pueda guardar un estado, un veredicto o un objetivo fuera de catalogo.
+INSTRUMENT_STATUSES = ("BORRADOR", "ACTIVO", "ARCHIVADO")
+VALIDATION_DIMENSIONS = (
+    "identidad",
+    "dispositivo",
+    "red",
+    "aplicacion",
+    "datos",
+    "monitoreo",
+)
+# El veredicto es una declaracion del experto, no un calculo del sistema. El
+# catalogo solo acota que valores puede declarar.
+VERDICTS = ("NO_CUMPLE", "CUMPLE_PARCIALMENTE", "CUMPLE")
+REPORT_OBJECTIVES = ("O1", "O2", "O3", "O4")
 
 # Entorno de ejecucion al que pertenece toda la evidencia de la plataforma.
 # La evidencia real es solo la del entorno F11: el resto no genera hallazgos.
@@ -202,6 +220,46 @@ class IncidentTransitionError(DatabaseError):
 
 class AlertNotFoundError(DatabaseError):
     """La alerta no existe entre las derivadas del estado real de la plataforma (M6)."""
+    pass
+
+
+class InstrumentValidationError(DatabaseError):
+    """El instrumento de validacion no cumple el contrato de M9."""
+    pass
+
+
+class InstrumentAlreadyExistsError(DatabaseError):
+    """Ya existe un instrumento con el mismo codigo."""
+    pass
+
+
+class InstrumentNotFoundError(DatabaseError):
+    """El instrumento solicitado no existe."""
+    pass
+
+
+class ExpertReviewValidationError(DatabaseError):
+    """El dictamen de experto no cumple el contrato de registro de M9."""
+    pass
+
+
+class ExpertReviewAlreadyExistsError(DatabaseError):
+    """Ya existe un dictamen registrado con el mismo codigo."""
+    pass
+
+
+class ExpertReviewNotFoundError(DatabaseError):
+    """El dictamen de experto solicitado no existe."""
+    pass
+
+
+class ReportValidationError(DatabaseError):
+    """El informe solicitado no cumple el contrato del modulo de informes."""
+    pass
+
+
+class ReportNotFoundError(DatabaseError):
+    """El informe solicitado no existe."""
     pass
 
 
@@ -773,6 +831,108 @@ class ClinicalDatabaseManager:
                         );
                     """)
                     cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (8, datetime('now'));")
+
+
+                if current_ver < 9:
+                    # Migracion 9: modulo M9 de validacion por expertos e
+                    # informes generados desde datos reales (F5). Es aditiva e
+                    # idempotente: solo crea tablas nuevas (CREATE TABLE IF NOT
+                    # EXISTS) y no altera ninguna existente, por lo que es
+                    # segura sobre una base ya poblada por las migraciones
+                    # 1..8. El instrumento es una herramienta de medida; los
+                    # dictamenes NO se siembran: solo los registra un experto.
+                    # 'synthetic' queda en 1 por defecto y el servidor lo
+                    # impone al escribir: la declaracion del cliente no decide
+                    # la naturaleza del registro.
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS validation_instruments (
+                            id TEXT PRIMARY KEY,
+                            code TEXT NOT NULL UNIQUE,
+                            name TEXT NOT NULL,
+                            description TEXT NOT NULL DEFAULT '',
+                            version TEXT NOT NULL,
+                            scale_min INTEGER NOT NULL DEFAULT 1,
+                            scale_max INTEGER NOT NULL DEFAULT 5,
+                            status TEXT NOT NULL,
+                            synthetic INTEGER NOT NULL DEFAULT 1,
+                            created_by TEXT NOT NULL DEFAULT '',
+                            created_at REAL NOT NULL,
+                            updated_at REAL NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_code ON validation_instruments(code);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_status ON validation_instruments(status);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS instrument_items (
+                            id TEXT PRIMARY KEY,
+                            instrument_id TEXT NOT NULL REFERENCES validation_instruments(id) ON DELETE CASCADE,
+                            code TEXT NOT NULL,
+                            dimension TEXT NOT NULL,
+                            statement TEXT NOT NULL,
+                            weight REAL NOT NULL DEFAULT 1,
+                            position INTEGER NOT NULL DEFAULT 0,
+                            UNIQUE (instrument_id, code)
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_instrument_items_instrument ON instrument_items(instrument_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_instrument_items_dimension ON instrument_items(dimension);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS expert_reviews (
+                            id TEXT PRIMARY KEY,
+                            code TEXT NOT NULL UNIQUE,
+                            instrument_id TEXT NOT NULL REFERENCES validation_instruments(id),
+                            instrument_version TEXT NOT NULL,
+                            expert_name TEXT NOT NULL,
+                            expert_role TEXT NOT NULL,
+                            expert_affiliation TEXT NOT NULL DEFAULT '',
+                            scope TEXT NOT NULL DEFAULT '',
+                            verdict TEXT NOT NULL,
+                            observations TEXT NOT NULL DEFAULT '',
+                            score REAL,
+                            reviewed_at TEXT NOT NULL,
+                            synthetic INTEGER NOT NULL DEFAULT 1,
+                            created_by TEXT NOT NULL DEFAULT '',
+                            created_at REAL NOT NULL
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_expert_reviews_instrument ON expert_reviews(instrument_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_expert_reviews_verdict ON expert_reviews(verdict);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_expert_reviews_reviewed ON expert_reviews(reviewed_at DESC);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS expert_review_answers (
+                            id TEXT PRIMARY KEY,
+                            review_id TEXT NOT NULL REFERENCES expert_reviews(id) ON DELETE CASCADE,
+                            item_id TEXT NOT NULL REFERENCES instrument_items(id),
+                            score INTEGER NOT NULL,
+                            comment TEXT NOT NULL DEFAULT '',
+                            UNIQUE (review_id, item_id)
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_expert_review_answers_review ON expert_review_answers(review_id);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_expert_review_answers_item ON expert_review_answers(item_id);")
+
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS reports (
+                            id TEXT PRIMARY KEY,
+                            code TEXT NOT NULL UNIQUE,
+                            title TEXT NOT NULL,
+                            objective TEXT NOT NULL,
+                            period_from TEXT NOT NULL,
+                            period_to TEXT NOT NULL,
+                            content TEXT NOT NULL,
+                            content_hash TEXT NOT NULL,
+                            generated_by TEXT NOT NULL,
+                            generated_at REAL NOT NULL,
+                            synthetic INTEGER NOT NULL DEFAULT 1
+                        );
+                    """)
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_objective ON reports(objective);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_generated ON reports(generated_at DESC);")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_hash ON reports(content_hash);")
+                    cur.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (9, datetime('now'));")
 
 
                 cur.execute("COMMIT;")
@@ -2868,6 +3028,468 @@ class ClinicalDatabaseManager:
         """
         def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
             cur.execute(sql, tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
+
+    # --------------------------------------------------------------------------
+    # M9: INSTRUMENTOS DE VALIDACION, DICTAMENES DE EXPERTOS E INFORMES (F5)
+    # --------------------------------------------------------------------------
+    def _insert_instrument_cursor(
+        self, cur: sqlite3.Cursor, instrument: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Inserta un instrumento y sus items en una transaccion abierta.
+
+        La capa de persistencia impone ``synthetic = 1``: un instrumento dado de
+        alta desde la plataforma es de laboratorio y la declaracion del cliente
+        no puede cambiarlo. Tambien vuelve a validar el contrato (escala
+        coherente, al menos un item, codigos de item unicos) para que un
+        escritor que no pase por la API no pueda guardar un instrumento roto.
+        """
+        code = str(instrument.get("code") or "").strip()
+        if not code:
+            raise InstrumentValidationError("El code del instrumento es obligatorio.")
+        name = str(instrument.get("name") or "").strip()
+        if not name:
+            raise InstrumentValidationError("El name del instrumento es obligatorio.")
+        version = str(instrument.get("version") or "").strip()
+        if not version:
+            raise InstrumentValidationError("La version del instrumento es obligatoria.")
+        status = str(instrument.get("status") or "BORRADOR").strip().upper()
+        if status not in INSTRUMENT_STATUSES:
+            raise InstrumentValidationError(
+                "Estado '%s' no admitido. Opciones: %s"
+                % (status, ", ".join(INSTRUMENT_STATUSES))
+            )
+        try:
+            scale_min = int(instrument.get("scale_min", 1))
+            scale_max = int(instrument.get("scale_max", 5))
+        except (TypeError, ValueError) as exc:
+            raise InstrumentValidationError("La escala debe ser numerica.") from exc
+        if scale_min >= scale_max:
+            raise InstrumentValidationError(
+                "Escala incoherente: scale_min (%s) debe ser menor que scale_max (%s)."
+                % (scale_min, scale_max)
+            )
+        if scale_min < 0:
+            raise InstrumentValidationError("scale_min no puede ser negativo.")
+
+        raw_items = instrument.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            raise InstrumentValidationError(
+                "El instrumento debe declarar al menos un item de medida."
+            )
+        item_codes: set = set()
+        items: List[Dict[str, Any]] = []
+        for position, raw in enumerate(raw_items):
+            if not isinstance(raw, dict):
+                raise InstrumentValidationError("Cada item debe ser un objeto JSON.")
+            item_code = str(raw.get("code") or "").strip()
+            if not item_code:
+                raise InstrumentValidationError("Todo item requiere un code.")
+            if item_code in item_codes:
+                raise InstrumentValidationError(
+                    "Codigo de item duplicado en el instrumento: '%s'." % item_code
+                )
+            item_codes.add(item_code)
+            dimension = str(raw.get("dimension") or "").strip().lower()
+            if dimension not in VALIDATION_DIMENSIONS:
+                raise InstrumentValidationError(
+                    "Dimension '%s' no admitida. Opciones: %s"
+                    % (dimension, ", ".join(VALIDATION_DIMENSIONS))
+                )
+            statement = str(raw.get("statement") or "").strip()
+            if not statement:
+                raise InstrumentValidationError(
+                    "El item '%s' no declara un enunciado verificable." % item_code
+                )
+            try:
+                weight = float(raw.get("weight", 1))
+            except (TypeError, ValueError) as exc:
+                raise InstrumentValidationError(
+                    "El peso del item '%s' debe ser numerico." % item_code
+                ) from exc
+            if weight <= 0:
+                raise InstrumentValidationError(
+                    "El peso del item '%s' debe ser mayor que cero." % item_code
+                )
+            items.append({
+                "id": "ITM-" + hashlib.sha256(
+                    ("%s|%s" % (code, item_code)).encode("utf-8")
+                ).hexdigest()[:10].upper(),
+                "code": item_code,
+                "dimension": dimension,
+                "statement": statement,
+                "weight": weight,
+                "position": int(raw.get("position", position)),
+            })
+
+        instrument_id = str(
+            instrument.get("id")
+            or ("INS-" + hashlib.sha256(
+                ("%s|%s" % (code, version)).encode("utf-8")
+            ).hexdigest()[:8].upper())
+        )
+        now = time.time()
+        try:
+            cur.execute("""
+                INSERT INTO validation_instruments (
+                    id, code, name, description, version, scale_min, scale_max,
+                    status, synthetic, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                instrument_id, code, name,
+                str(instrument.get("description") or "").strip(),
+                version, scale_min, scale_max, status, 1,
+                str(instrument.get("created_by") or "SYSTEM"), now, now,
+            ))
+        except sqlite3.IntegrityError as exc:
+            message = str(exc)
+            if "UNIQUE" in message.upper() or "PRIMARY KEY" in message.upper():
+                raise InstrumentAlreadyExistsError(
+                    "Ya existe un instrumento con el codigo '%s'." % code
+                ) from exc
+            raise InstrumentValidationError(
+                "Instrumento invalido: %s" % message
+            ) from exc
+
+        for item in items:
+            cur.execute("""
+                INSERT INTO instrument_items (
+                    id, instrument_id, code, dimension, statement, weight, position
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+            """, (
+                item["id"], instrument_id, item["code"], item["dimension"],
+                item["statement"], item["weight"], item["position"],
+            ))
+
+        cur.execute("SELECT * FROM validation_instruments WHERE id = ?;", (instrument_id,))
+        result = dict(cur.fetchone())
+        cur.execute(
+            "SELECT * FROM instrument_items WHERE instrument_id = ? "
+            "ORDER BY position ASC, code ASC;",
+            (instrument_id,),
+        )
+        result["items"] = [dict(r) for r in cur.fetchall()]
+        return result
+
+    def insert_instrument_with_audit_event(
+        self, instrument: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Da de alta un instrumento y sus items con auditoria atomica."""
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_instrument_cursor(cur, instrument), audit_event
+        )
+
+    def get_instrument(self, instrument_id_or_code: str) -> Optional[Dict[str, Any]]:
+        """Recupera un instrumento con sus items, o None si no existe."""
+        def op(cur: sqlite3.Cursor) -> Optional[Dict[str, Any]]:
+            cur.execute(
+                "SELECT * FROM validation_instruments WHERE id = ? OR code = ?;",
+                (instrument_id_or_code, instrument_id_or_code),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            cur.execute(
+                "SELECT * FROM instrument_items WHERE instrument_id = ? "
+                "ORDER BY position ASC, code ASC;",
+                (result["id"],),
+            )
+            result["items"] = [dict(r) for r in cur.fetchall()]
+            return result
+        return self._run_simple_read(op)
+
+    def list_instruments(self) -> List[Dict[str, Any]]:
+        """Lista los instrumentos con el numero real de items de cada uno."""
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            cur.execute("""
+                SELECT i.*,
+                       (SELECT COUNT(*) FROM instrument_items t WHERE t.instrument_id = i.id)
+                           AS item_count
+                FROM validation_instruments i
+                ORDER BY i.created_at ASC, i.code ASC;
+            """)
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
+
+    def _insert_expert_review_cursor(
+        self, cur: sqlite3.Cursor, review: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Registra un dictamen y sus respuestas en una transaccion abierta.
+
+        El ``score`` que llega ya fue calculado por el modulo de dominio como
+        media ponderada DESCRIPTIVA de las respuestas; la persistencia no lo
+        recalcula ni lo usa para deducir el veredicto: el veredicto es el que
+        declaro el experto y se guarda tal cual.
+        """
+        code = str(review.get("code") or "").strip()
+        if not code:
+            raise ExpertReviewValidationError("El code del dictamen es obligatorio.")
+        instrument_id = str(review.get("instrument_id") or "").strip()
+        cur.execute("SELECT * FROM validation_instruments WHERE id = ?;", (instrument_id,))
+        instrument_row = cur.fetchone()
+        if instrument_row is None:
+            raise InstrumentNotFoundError(
+                "El instrumento '%s' no existe." % instrument_id
+            )
+        instrument = dict(instrument_row)
+        if str(instrument["status"]) != "ACTIVO":
+            raise ExpertReviewValidationError(
+                "El instrumento '%s' no esta ACTIVO (estado: %s)."
+                % (instrument["code"], instrument["status"])
+            )
+        verdict = str(review.get("verdict") or "").strip().upper()
+        if verdict not in VERDICTS:
+            raise ExpertReviewValidationError(
+                "Veredicto '%s' no admitido. Opciones: %s"
+                % (verdict, ", ".join(VERDICTS))
+            )
+        expert_name = str(review.get("expert_name") or "").strip()
+        if not expert_name:
+            raise ExpertReviewValidationError(
+                "El dictamen debe registrar el nombre del experto que lo emite."
+            )
+        expert_role = str(review.get("expert_role") or "").strip()
+        if not expert_role:
+            raise ExpertReviewValidationError(
+                "El dictamen debe registrar el rol o cargo del experto."
+            )
+
+        cur.execute(
+            "SELECT * FROM instrument_items WHERE instrument_id = ?;",
+            (instrument_id,),
+        )
+        items_by_id = {str(r["id"]): dict(r) for r in cur.fetchall()}
+
+        raw_answers = review.get("answers")
+        if not isinstance(raw_answers, list) or not raw_answers:
+            raise ExpertReviewValidationError(
+                "El dictamen debe incluir al menos una respuesta por item."
+            )
+        answers: List[Dict[str, Any]] = []
+        seen_items: set = set()
+        for raw in raw_answers:
+            if not isinstance(raw, dict):
+                raise ExpertReviewValidationError("Cada respuesta debe ser un objeto JSON.")
+            item_id = str(raw.get("item_id") or "").strip()
+            item = items_by_id.get(item_id)
+            if item is None:
+                raise ExpertReviewValidationError(
+                    "El item '%s' no pertenece al instrumento '%s'."
+                    % (item_id, instrument["code"])
+                )
+            if item_id in seen_items:
+                raise ExpertReviewValidationError(
+                    "Respuesta duplicada para el item '%s'." % item["code"]
+                )
+            seen_items.add(item_id)
+            try:
+                answer_score = int(raw.get("score"))
+            except (TypeError, ValueError) as exc:
+                raise ExpertReviewValidationError(
+                    "La respuesta del item '%s' debe ser un entero." % item["code"]
+                ) from exc
+            if not int(instrument["scale_min"]) <= answer_score <= int(instrument["scale_max"]):
+                raise ExpertReviewValidationError(
+                    "La respuesta del item '%s' (%s) queda fuera de la escala %s..%s."
+                    % (
+                        item["code"], answer_score,
+                        instrument["scale_min"], instrument["scale_max"],
+                    )
+                )
+            answers.append({
+                "id": "ANS-" + hashlib.sha256(
+                    ("%s|%s" % (code, item_id)).encode("utf-8")
+                ).hexdigest()[:10].upper(),
+                "item_id": item_id,
+                "score": answer_score,
+                "comment": str(raw.get("comment") or "").strip(),
+            })
+
+        try:
+            score_value = round(float(review.get("score")), 2)
+        except (TypeError, ValueError) as exc:
+            raise ExpertReviewValidationError(
+                "El score descriptivo del dictamen debe ser numerico."
+            ) from exc
+
+        review_id = str(
+            review.get("id")
+            or ("REV-" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:8].upper())
+        )
+        now = time.time()
+        reviewed_at = str(review.get("reviewed_at") or time.strftime("%Y-%m-%d", time.gmtime()))
+        try:
+            cur.execute("""
+                INSERT INTO expert_reviews (
+                    id, code, instrument_id, instrument_version, expert_name,
+                    expert_role, expert_affiliation, scope, verdict, observations,
+                    score, reviewed_at, synthetic, created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                review_id, code, instrument_id, str(instrument["version"]),
+                expert_name, expert_role,
+                str(review.get("expert_affiliation") or "").strip(),
+                str(review.get("scope") or "").strip(),
+                verdict, str(review.get("observations") or "").strip(),
+                score_value, reviewed_at, 1,
+                str(review.get("created_by") or "SYSTEM"), now,
+            ))
+        except sqlite3.IntegrityError as exc:
+            message = str(exc)
+            if "UNIQUE" in message.upper() or "PRIMARY KEY" in message.upper():
+                raise ExpertReviewAlreadyExistsError(
+                    "Ya existe un dictamen registrado con el codigo '%s'." % code
+                ) from exc
+            raise ExpertReviewValidationError(
+                "Dictamen invalido: %s" % message
+            ) from exc
+
+        for answer in answers:
+            cur.execute("""
+                INSERT INTO expert_review_answers (
+                    id, review_id, item_id, score, comment
+                ) VALUES (?, ?, ?, ?, ?);
+            """, (
+                answer["id"], review_id, answer["item_id"],
+                answer["score"], answer["comment"],
+            ))
+
+        cur.execute("SELECT * FROM expert_reviews WHERE id = ?;", (review_id,))
+        result = dict(cur.fetchone())
+        cur.execute("""
+            SELECT a.*, t.code AS item_code, t.dimension, t.statement, t.weight
+            FROM expert_review_answers a
+            JOIN instrument_items t ON t.id = a.item_id
+            WHERE a.review_id = ?
+            ORDER BY t.position ASC, t.code ASC;
+        """, (review_id,))
+        result["answers"] = [dict(r) for r in cur.fetchall()]
+        return result
+
+    def insert_expert_review_with_audit_event(
+        self, review: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Registra un dictamen y sus respuestas con auditoria atomica."""
+        return self.run_clinical_transaction(
+            lambda cur: self._insert_expert_review_cursor(cur, review), audit_event
+        )
+
+    def get_expert_review(self, review_id_or_code: str) -> Optional[Dict[str, Any]]:
+        """Recupera un dictamen con sus respuestas, o None si no existe."""
+        def op(cur: sqlite3.Cursor) -> Optional[Dict[str, Any]]:
+            cur.execute(
+                "SELECT * FROM expert_reviews WHERE id = ? OR code = ?;",
+                (review_id_or_code, review_id_or_code),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            cur.execute("""
+                SELECT a.*, t.code AS item_code, t.dimension, t.statement, t.weight
+                FROM expert_review_answers a
+                JOIN instrument_items t ON t.id = a.item_id
+                WHERE a.review_id = ?
+                ORDER BY t.position ASC, t.code ASC;
+            """, (result["id"],))
+            result["answers"] = [dict(r) for r in cur.fetchall()]
+            return result
+        return self._run_simple_read(op)
+
+    def list_expert_reviews(self) -> List[Dict[str, Any]]:
+        """Lista los dictamenes registrados con el numero real de respuestas."""
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            cur.execute("""
+                SELECT r.*,
+                       (SELECT COUNT(*) FROM expert_review_answers a WHERE a.review_id = r.id)
+                           AS answers_count
+                FROM expert_reviews r
+                ORDER BY r.reviewed_at DESC, r.code ASC;
+            """)
+            return [dict(r) for r in cur.fetchall()]
+        return self._run_simple_read(op)
+
+    def insert_report_with_audit_event(
+        self, report: Dict[str, Any], audit_event: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Persiste un informe generado y lo audita en una sola transaccion.
+
+        El contenido llega ya construido desde el modulo de informes a partir
+        de datos reales; la persistencia solo comprueba que el hash declarado
+        corresponde exactamente al contenido que se guarda.
+        """
+        code = str(report.get("code") or "").strip()
+        title = str(report.get("title") or "").strip()
+        objective = str(report.get("objective") or "").strip().upper()
+        content = str(report.get("content") or "")
+        content_hash = str(report.get("content_hash") or "").strip().lower()
+        if objective not in REPORT_OBJECTIVES:
+            raise ReportValidationError(
+                "Objetivo '%s' no admitido. Opciones: %s"
+                % (objective, ", ".join(REPORT_OBJECTIVES))
+            )
+        if not code or not title:
+            raise ReportValidationError("El informe requiere code y title.")
+        actual_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if content_hash != actual_hash:
+            raise ReportValidationError(
+                "El content_hash no corresponde al contenido Markdown del informe."
+            )
+
+        report_id = str(
+            report.get("id")
+            or ("RPT-ID-" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:8].upper())
+        )
+        now = time.time()
+
+        def operation(cur: sqlite3.Cursor) -> Dict[str, Any]:
+            try:
+                cur.execute("""
+                    INSERT INTO reports (
+                        id, code, title, objective, period_from, period_to,
+                        content, content_hash, generated_by, generated_at, synthetic
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    report_id, code, title, objective,
+                    str(report.get("period_from") or ""),
+                    str(report.get("period_to") or ""),
+                    content, content_hash,
+                    str(report.get("generated_by") or "SYSTEM"), now, 1,
+                ))
+            except sqlite3.IntegrityError as exc:
+                message = str(exc)
+                if "UNIQUE" in message.upper() or "PRIMARY KEY" in message.upper():
+                    raise ReportValidationError(
+                        "Ya existe un informe con el codigo '%s'." % code
+                    ) from exc
+                raise
+            cur.execute("SELECT * FROM reports WHERE id = ?;", (report_id,))
+            return dict(cur.fetchone())
+
+        return self.run_clinical_transaction(operation, audit_event)
+
+    def get_report(self, report_id_or_code: str) -> Optional[Dict[str, Any]]:
+        """Recupera un informe con su contenido Markdown integro."""
+        def op(cur: sqlite3.Cursor) -> Optional[Dict[str, Any]]:
+            cur.execute(
+                "SELECT * FROM reports WHERE id = ? OR code = ?;",
+                (report_id_or_code, report_id_or_code),
+            )
+            row = cur.fetchone()
+            return dict(row) if row is not None else None
+        return self._run_simple_read(op)
+
+    def list_reports(self) -> List[Dict[str, Any]]:
+        """Lista los informes sin el contenido, del mas reciente al mas antiguo."""
+        def op(cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+            cur.execute("""
+                SELECT id, code, title, objective, period_from, period_to,
+                       content_hash, generated_by, generated_at, synthetic
+                FROM reports
+                ORDER BY generated_at DESC, code ASC;
+            """)
             return [dict(r) for r in cur.fetchall()]
         return self._run_simple_read(op)
 

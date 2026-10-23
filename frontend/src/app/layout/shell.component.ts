@@ -105,6 +105,30 @@ const NAV_ITEMS: readonly NavItem[] = [
     route: '/alertas',
     roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
   },
+  {
+    label: 'Validación (M9)',
+    icon: 'fact_check',
+    route: '/validacion-expertos',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Instrumentos',
+    icon: 'science',
+    route: '/instrumentos',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Evidencias',
+    icon: 'folder_open',
+    route: '/evidencias',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
+  {
+    label: 'Informes',
+    icon: 'description',
+    route: '/informes',
+    roles: ['ROLE_SECURITY_AUDITOR', 'ROLE_PLATFORM_ADMIN'],
+  },
 ];
 
 @Component({

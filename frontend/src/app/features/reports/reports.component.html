@@ -1,0 +1,307 @@
+<section class="reports-page" aria-label="Informes de evidencia">
+  <!-- Cabecera -->
+  <header class="page-header">
+    <div class="header-titles">
+      <div class="header-badge">
+        <mat-icon>description</mat-icon>
+        <span>F11 · Cierre documental</span>
+      </div>
+      <h1>Informes de evidencia</h1>
+      <p class="subtitle">
+        Informes Markdown construidos por el backend exclusivamente con filas reales de la base. Su
+        código y su hash sha256 son la prueba de integridad del documento.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (canManage()) {
+        <button mat-flat-button color="primary" (click)="openForm()">
+          <mat-icon>add</mat-icon>
+          Generar informe
+        </button>
+      }
+      <button mat-stroked-button (click)="loadData()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-banner" role="alert">
+      <mat-icon>error_outline</mat-icon>
+      <span>{{ error() }}</span>
+    </div>
+  }
+
+  <!-- Resumen -->
+  <div class="kpi-grid">
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="primary">description</mat-icon>
+        <mat-card-title>Informes generados</mat-card-title>
+        <mat-card-subtitle>Documentos persistidos con su hash</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ reportCount() }}</div>
+        <div class="kpi-sub">El contenido no se edita: se genera desde la base</div>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="kpi-card">
+      <mat-card-header>
+        <mat-icon mat-card-avatar color="accent">flag</mat-icon>
+        <mat-card-title>Objetivos cubiertos</mat-card-title>
+        <mat-card-subtitle>Objetivos con al menos un informe</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <div class="kpi-value">{{ coveredObjectives() }} / 4</div>
+        <div class="kpi-sub">O1, O2, O3 y O4</div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+
+  <!-- Lista de informes -->
+  <mat-card class="table-card">
+    <mat-card-header>
+      <mat-icon mat-card-avatar color="primary">table_chart</mat-icon>
+      <mat-card-title>Informes registrados</mat-card-title>
+      <mat-card-subtitle>{{ reports().length }} registros recuperados de la API</mat-card-subtitle>
+    </mat-card-header>
+
+    <mat-card-content class="table-content">
+      @if (loading()) {
+        <div class="loading-shade">
+          <mat-progress-spinner mode="indeterminate" diameter="48"></mat-progress-spinner>
+          <span>Consultando informes...</span>
+        </div>
+      }
+
+      <div class="table-responsive">
+        <table mat-table [dataSource]="reports()" class="mat-elevation-z0">
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef>Código</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="code-badge">{{ r.code }}</span>
+              @if (r.synthetic) {
+                <span class="synthetic-tag" title="Informe de laboratorio">SINT</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="title">
+            <th mat-header-cell *matHeaderCellDef>Título</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="report-title">{{ r.title }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="objective">
+            <th mat-header-cell *matHeaderCellDef>Objetivo</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="objective-badge">{{ r.objective }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="period">
+            <th mat-header-cell *matHeaderCellDef>Periodo</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="period-cell">{{ r.period_from }} → {{ r.period_to }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="generated_at">
+            <th mat-header-cell *matHeaderCellDef>Generado</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="date-cell">{{ toDate(r.generated_at) | date: 'medium' }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="author">
+            <th mat-header-cell *matHeaderCellDef>Autor</th>
+            <td mat-cell *matCellDef="let r">
+              <span class="author-cell">{{ r.generated_by || 'SYSTEM' }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="hash">
+            <th mat-header-cell *matHeaderCellDef>Hash</th>
+            <td mat-cell *matCellDef="let r">
+              <code class="hash-short" [title]="r.content_hash">{{ shortHash(r.content_hash) }}…</code>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef>Acciones</th>
+            <td mat-cell *matCellDef="let r">
+              <button mat-icon-button color="primary" (click)="openReport(r)" title="Ver informe íntegro">
+                <mat-icon>visibility</mat-icon>
+              </button>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr
+            mat-row
+            *matRowDef="let row; columns: displayedColumns"
+            [class.selected-row]="selected()?.id === row.id"
+          ></tr>
+        </table>
+      </div>
+
+      @if (!loading() && reports().length === 0) {
+        <mat-card class="empty-card">
+          <mat-icon>description</mat-icon>
+          <h2>No hay informes generados</h2>
+          <p>
+            La API no devolvió ningún informe. No se muestra contenido de ejemplo: el informe se
+            crea desde datos reales cuando un administrador lo genera con su objetivo y periodo.
+          </p>
+        </mat-card>
+      }
+    </mat-card-content>
+  </mat-card>
+
+  <!-- Detalle del informe -->
+  @if (loadingDetail()) {
+    <div class="loading-shade">
+      <mat-progress-spinner mode="indeterminate" diameter="36"></mat-progress-spinner>
+      <span>Cargando el informe íntegro...</span>
+    </div>
+  }
+
+  @if (selected(); as report) {
+    <div class="detail-section">
+      <mat-card class="detail-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="accent">description</mat-icon>
+          <div class="header-content">
+            <mat-card-title>{{ report.title }}</mat-card-title>
+            <mat-card-subtitle>
+              <code>{{ report.code }}</code> · objetivo {{ report.objective }} · periodo
+              {{ report.period_from }} a {{ report.period_to }}
+            </mat-card-subtitle>
+          </div>
+          <button mat-icon-button (click)="clearSelection()" class="close-btn" title="Cerrar informe">
+            <mat-icon>close</mat-icon>
+          </button>
+        </mat-card-header>
+
+        <mat-card-content>
+          <div class="detail-grid">
+            <div class="detail-row">
+              <div class="detail-col">
+                <span class="detail-label">Código del informe</span>
+                <span class="detail-val"><code>{{ report.code }}</code></span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Generado por</span>
+                <span class="detail-val">{{ report.generated_by || 'SYSTEM' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Fecha de generación</span>
+                <span class="detail-val">{{ toDate(report.generated_at) | date: 'medium' }}</span>
+              </div>
+              <div class="detail-col">
+                <span class="detail-label">Origen</span>
+                <span class="detail-val">
+                  {{ report.synthetic ? 'Informe de laboratorio (sintético)' : 'Informe declarado' }}
+                </span>
+              </div>
+            </div>
+
+            <div class="hash-block">
+              <span class="detail-label">Hash sha256 del contenido (prueba de integridad)</span>
+              <code class="hash-full">{{ report.content_hash }}</code>
+              <span class="hash-note">
+                El código del informe se deriva del hash corto. Si el documento cambiara, el hash
+                dejaría de coincidir.
+              </span>
+            </div>
+          </div>
+
+          <div class="content-block">
+            <h3>
+              <mat-icon>code</mat-icon>
+              Markdown íntegro devuelto por la API
+            </h3>
+            <p class="content-caption">
+              Se muestra tal cual, sin interpretarlo, resumirlo ni reformatearlo.
+            </p>
+            <pre class="markdown-content">{{ report.content }}</pre>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  }
+
+  <!-- Generacion de informe -->
+  @if (showForm()) {
+    <div class="modal-backdrop">
+      <mat-card class="modal-card">
+        <mat-card-header>
+          <mat-icon mat-card-avatar color="primary">add</mat-icon>
+          <mat-card-title>Generar informe de evidencia</mat-card-title>
+          <mat-card-subtitle>
+            Requiere rol administrador de plataforma y segundo factor (MFA) acreditado
+          </mat-card-subtitle>
+        </mat-card-header>
+
+        <mat-card-content class="form-content">
+          @if (formError()) {
+            <div class="error-banner" role="alert">
+              <mat-icon>error_outline</mat-icon>
+              <span>{{ formError() }}</span>
+            </div>
+          }
+
+          <div class="form-rule">
+            <mat-icon>info_outline</mat-icon>
+            <span>
+              No se redacta contenido aquí: el backend construye el Markdown con las filas reales
+              del objetivo y del periodo. Las ausencias se declaran en el propio informe.
+            </span>
+          </div>
+
+          <div class="form-grid">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Objetivo</mat-label>
+              <mat-select [(ngModel)]="formObjective">
+                @for (objective of objectives; track objective) {
+                  <mat-option [value]="objective">{{ objectiveLabels[objective] }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Periodo desde</mat-label>
+              <input matInput type="date" [(ngModel)]="formPeriodFrom">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Periodo hasta</mat-label>
+              <input matInput type="date" [(ngModel)]="formPeriodTo">
+            </mat-form-field>
+          </div>
+
+          <p class="form-note">
+            El código, el contenido y el hash los impone el servidor. Si el informe ya existe para
+            ese objetivo, periodo y contenido, la API devuelve el registrado sin duplicarlo.
+          </p>
+        </mat-card-content>
+
+        <mat-card-actions align="end">
+          <button mat-button (click)="cancelForm()" [disabled]="saving()">Cancelar</button>
+          <button mat-flat-button color="primary" (click)="generateReport()" [disabled]="saving()">
+            @if (saving()) {
+              <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+            } @else {
+              <mat-icon>check</mat-icon>
+            }
+            Generar informe
+          </button>
+        </mat-card-actions>
+      </mat-card>
+    </div>
+  }
+</section>
