@@ -20,7 +20,7 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?set in infra/f11/.env}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set in infra/f11/.env}
-      KC_HOSTNAME: http://127.0.0.1:8085
+      KC_PROXY_HEADERS: "xforwarded"
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
       KC_LOG_LEVEL: info
@@ -30,7 +30,7 @@ services:
       - keycloak-data:/opt/keycloak/data
     networks:
       - f11-net
-    restart: "no"
+    restart: "unless-stopped"
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true

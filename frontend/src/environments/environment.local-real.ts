@@ -11,7 +11,10 @@ export const environment = {
   useMockAuth: false,
   apiBaseUrl: '',
   keycloak: {
-    url: 'http://127.0.0.1:8085',
+    url:
+      typeof window !== 'undefined' && window.location.hostname.includes('tailb0f78a.ts.net')
+        ? `${window.location.protocol}//${window.location.host}`
+        : 'http://127.0.0.1:8085',
     realm: 'hospital-lab-local',
     clientId: 'clinical-poc',
   },

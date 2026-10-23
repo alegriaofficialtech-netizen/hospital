@@ -1,0 +1,58 @@
+{
+    admin off
+}
+
+:8020 {
+    log {
+        output file /var/log/caddy/persistent.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    encode gzip zstd
+
+    route {
+        # Deny administrative endpoints from reverse-proxy access
+        @blocked {
+            path /admin/*
+            path /admin
+            path /metrics*
+            path /health*
+        }
+        respond @blocked 403
+
+        # Reverse proxy Keycloak realm & static resources
+        @keycloak {
+            path /realms/*
+            path /resources/*
+            path /js/*
+        }
+        reverse_proxy @keycloak 127.0.0.1:8085 {
+            header_up Host {host}
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Port 8443
+            header_down Location http://127.0.0.1:8085 https://servidor-1.tailb0f78a.ts.net:8443
+        }
+
+        # Reverse proxy API to isolated persistent backend (port 8011)
+        @api path /api/*
+        reverse_proxy @api 127.0.0.1:8011 {
+            header_up Host 127.0.0.1:8011
+            header_up X-Forwarded-Proto https
+        }
+
+        # Angular SPA
+        root * /usr/share/caddy
+        try_files {path} /index.html
+        file_server
+    }
+}

@@ -259,7 +259,11 @@ export class AuthService {
   private async initializeKeycloak(): Promise<void> {
     try {
       const { default: KeycloakClient } = await import('keycloak-js');
-      const keycloak = new KeycloakClient(environment.keycloak);
+      const kcConfig = { ...environment.keycloak };
+      if (typeof window !== 'undefined' && window.location.hostname.includes('tailb0f78a.ts.net')) {
+        kcConfig.url = `${window.location.protocol}//${window.location.host}`;
+      }
+      const keycloak = new KeycloakClient(kcConfig);
       this.keycloak = keycloak;
       const authenticated = await withTimeout(
         keycloak.init({

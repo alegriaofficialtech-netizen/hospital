@@ -32,9 +32,16 @@ creds = json.loads(creds_file.read_text(encoding="utf-8"))
 
 def get_token(username):
     user = creds["users"][username]
-    flow = setup_realm.BrowserFlow(KC_URL, creds["realm"], creds["clientId"], creds["redirectUri"])
-    res = flow.login(username, user["password"], user.get("totp_secret"))
-    return res["access_token"]
+    for attempt in range(3):
+        try:
+            flow = setup_realm.BrowserFlow(KC_URL, creds["realm"], creds["clientId"], creds["redirectUri"])
+            res = flow.login(username, user["password"], user.get("totp_secret"))
+            return res["access_token"]
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(15)
+            else:
+                raise
 
 def api_call(path, token=None, method="GET", body=None):
     headers = {"Content-Type": "application/json"}

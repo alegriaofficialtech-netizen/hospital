@@ -609,9 +609,13 @@ class ZeroTrustJWTValidator:
         # Emisor Confiable (Issuer)
         iss = payload.get("iss")
         expected_iss = self.cache_manager.expected_issuer
-        if not iss or iss != expected_iss:
+        trusted_issuers = {expected_iss} if expected_iss else set()
+        if expected_iss and expected_iss.endswith("/realms/hospital-lab-local"):
+            trusted_issuers.add("https://servidor-1.tailb0f78a.ts.net:8443/realms/hospital-lab-local")
+            trusted_issuers.add("http://127.0.0.1:8085/realms/hospital-lab-local")
+        if not iss or iss not in trusted_issuers:
             raise UntrustedIssuerError(
-                f"Emisor no confiable: recibido '{iss}', esperado '{expected_iss}'."
+                f"Emisor no confiable: recibido '{iss}', esperados {trusted_issuers}."
             )
 
         # Audiencia Espec?fica
