@@ -562,3 +562,41 @@ El minimo privilegio se cumple en los dos sentidos: quien no debe leer recibe 40
 2. **`admin.test`**: el alta existe pero su TOTP sigue sin enrolar; `medico.test` es el administrador provisional con `sgsi-admin`. Procedimiento en `odd/tasks/procedimiento-enrolamiento-admin.md`.
 3. **Re-sembrar la base** antes de una demostracion: la suite deja filas sinteticas (marcadas) en riesgos, controles, incidentes, instrumentos, dictamenes e informes.
 4. **Despliegue**: todo es local, sin corte a produccion y sin push (47 commits por delante de `master` en la rama `feat/f11-f3-risks-controls`).
+
+## Cierre de F6: Consolidacion Tecnica, Respaldo Seguro y Preparacion de Demostracion (2026-10-23)
+
+F6 queda formalmente implementada, verificada y respaldada en `servidor-1`, cerrando el ciclo de consolidacion del proyecto SGSI-ZTA Hospital Lab.
+
+### 1. Auditoria Tecnica y Pruebas
+- **166/166 pruebas de API aprobadas** en `infra/f11/run-api-tests.sh` ejecutadas contra la pila real (376.259s, cero fallas y cero regresiones).
+- **Comprobaciones estaticas aprobadas** en `infra/f11/static-check.sh` (22 archivos analizados sin errores de AST, dependencias limpias, sintaxis shell y compose validas).
+- **Verificacion en navegador real**: series de capturas de pantalla de F4 (24/24 comprobaciones) y F5 (34/34 comprobaciones) en `capturas/shots-f4` y `capturas/shots-f5`.
+- **Integridad criptografica de auditoria**: 2885 eventos encadenados por hash SHA-256 (`prev_hash` -> `hash`) verificados sin ninguna discontinuidad ni alteracion. Firma HMAC del checkpoint verificada con ancla lateral (`lis.db.anchor-key`).
+- **Seguridad de secretos**: cero credenciales, contrasenas o tokens expuestos en la cadena de auditoria.
+
+### 2. Respaldo Seguro y Verificacion de Recuperacion
+- **Herramienta automatizada**: `infra/f11/backup-secure.py` y `infra/f11/backup-secure.sh`.
+- **Ubicacion de respaldo**: `/home/elcra/sgsi-zta-runtime/f11/backups/f6_backup_<timestamp>` con permisos restrictivos `0700`.
+- **Contenido del respaldo**:
+  - `lis.db`: snapshot consistente obtenido mediante `sqlite3.backup()` con permisos `0600`.
+  - `git_repo.bundle`: bundle Git completo con todo el historial, ramas locales (`HEAD`, `master`, `feat/f11-f3-risks-controls`, `feat/f11-preflight-gate`) y referencias de `stash`.
+  - `secrets/`: subdirectorio protegido (`0700`) con `lis.db.anchor-key` y ficheros de credenciales (`credentials.json`, `admin-credentials.json`, `admin-sinmfa-credentials.json`, `e2e-secrets.json`) con permisos `0600`.
+  - `metadata.json`: esquema, migraciones (1..9), conteo de 21 tablas, datos Git y firma del checkpoint.
+  - `SHA256SUMS`: firmas criptograficas verificables de todos los artefactos.
+- **Ensayo de restauracion**: comprobado en directorio temporal aislado con `PRAGMA integrity_check`, lectura de checkpoint y verificacion de ancla.
+
+### 3. Estado de la Administracion
+- `admin.test` permanece con cuenta creada pero pendiente de enrolamiento interactivo de TOTP por un operador humano autorizado (`odd/tasks/procedimiento-enrolamiento-admin.md`). No se falsifica ni se omite el segundo factor.
+- `medico.test` conserva privilegios provisionales de administracion con TOTP (`sgsi-admin` + `mfa-required`), garantizando la operatividad de la plataforma bajo estricto cumplimiento de Zero Trust.
+
+### 4. Entorno de Demostracion Limpia
+- **Herramienta**: `infra/f11/demo-prep.sh` y `infra/f11/demo-switch.sh`.
+- **Base demo aislada**: `/home/elcra/sgsi-zta-runtime/f11/demo/lis.db` generada con catalogos limpios sin residuos de pruebas (11 activos, 5 riesgos 5x5, 9 controles normativos, 2 incidentes, instrumento INSTR-F11-ZTA-01 y cero dictamenes falsos).
+- La base operativa `/home/elcra/sgsi-zta-runtime/f11/lis.db` permanece activa y sin alteraciones.
+
+### 5. Entregables Documentales en `docs/`
+- `docs/manual-tecnico.md`: arquitectura, tecnologias, modulos M0-M9, base relacional, autenticacion, autorizacion y recuperacion.
+- `docs/manual-usuario.md`: guia de operacion de todos los modulos con referencia a capturas de pantalla autenticas.
+- `docs/informe-pruebas-f6.md`: reporte integral de 166 pruebas de API, pruebas negativas, rollback y verificaciones de auditoria.
+- `docs/matriz-trazabilidad-tesis.md`: correspondencia de Objetivos O1 a O4 con 749 evidencias verificables, distinguiendo resultados reales de datos sinteticos.
+- `docs/guia-evaluacion-expertos.md`: guia metodologica para evaluadores independientes sobre el instrumento INSTR-F11-ZTA-01.
